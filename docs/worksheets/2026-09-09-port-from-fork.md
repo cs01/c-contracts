@@ -128,9 +128,30 @@ work that a released clang has.
 | line | fork code | replace with |
 |---|---|---|
 | 10 | `#include "clang/AST/ContractSpecifier.h"` | `#include "Contract.h"` |
-| 653-657 | `Call->getDirectCallee()->getContractDecl()`, iterate for `CK_Post` | `collectContract(callee)`, filter `Kind != Pre` |
+| 653-657 | `Call->getDirectCallee()->getContractDecl()`, iterate for `CK_Post` | **drop for v1** — see below |
 | 687-704 | same for `CK_Pre` in `checkCall` | `collectContract(callee)`, filter `Kind == Pre`, use `Clause::Cond` |
 | 728-730 | the function's *own* preconditions seed the entry state | `collectContract(FD)`, filter Pre |
+
+**`valueFromPost` cannot be ported as-is, and is dropped for v1.** The fork
+reads a callee's *postconditions* to learn that a returned pointer is non-null
+(`char *p = xmalloc(n); f(p);` discharges `pre(p != 0)`). Here it cannot:
+`Extract.cpp` leaves `Clause::Cond` **null** for Post and Returns, because a
+postcondition arrives as an `annotate` string that clang only lexed. The typed
+`Expr` exists only inside the ghost pass's reparse, which is a different
+`ASTContext`, so its pointers cannot be evaluated against this TU's state.
+Returning `AbstractValue::unknown()` loses precision and invents no reports,
+which is the safe direction. Recovering it later means pattern-matching
+`Clause::Text` for `result != 0` / `result != NULL` / a bare `result` on a
+pointer -- worth doing only if a real case wants it.
+
+**The second invariant has a cleaner fix than storing the declaring decl.** Key
+the substitution on the parameter's *index* (`ParmVarDecl::getFunctionScopeIndex()`)
+rather than on `ParmVarDecl` identity. A prototype and its definition disagree
+about which `ParmVarDecl` objects exist but never about what position a
+parameter sits in, so indexing sidesteps the question of which redeclaration
+spelled the contract. `Evaluator`'s `Subst` becomes keyed on `unsigned`, and its
+`DeclRefExpr` case maps a `ParmVarDecl` whose `DeclContext` is in the callee's
+redecl chain through `getFunctionScopeIndex()`.
 
 `Clause::Cond` is already the contract, not the `diagnose_if` condition — the
 `!` is stripped in `Extract.cpp`'s `contractFromViolation`. Do not re-negate it.
@@ -254,27 +275,94 @@ byte on the fork's existing lit fixtures.
 - **`llvm::outs()` and `llvm::errs()` do not flush in a fixed order.**
   `test/run.sh` captures them separately and joins them deterministically.
 
-## 7. Open questions the user has not answered
+## 7. Decisions and open questions
 
-**(a) `is_fresh` vs `w_ok` — now urgent, with evidence.** `writes(p, n)` lowers
-to `__CPROVER_requires(w_ok(p, n))`, which says the memory is valid but says
-nothing about aliasing. Measured on the simplest function that exists:
+**(a) `is_fresh` vs `w_ok` — DECIDED 2026-09-09: grow a separation concept.**
+
+`writes(p, n)` keeps meaning exactly what it says: this memory is valid to
+write. It lowers to `__CPROVER_w_ok` and it does **not** imply anything about
+aliasing. The aliasing claim gets its own clause, which a reader can see in the
+annotation. The rejected alternative was defining `writes`+`reads` on one call
+to imply disjointness: that makes the annotation assert something nobody can
+find in the words, which is the failure this whole project argues against.
+
+The evidence that forced the question, measured on the simplest function that
+exists:
 
 ```c
 void zero(unsigned char *p, size_t n) writes (p, n) { ... }
 ```
 
-| clause | CBMC |
-|---|---|
-| `writes (p, n)` → `w_ok` | 10 of 41 failed — **VERIFICATION FAILED** |
-| `pre(fresh(p,n)) assigns(range(p,0,n))` → `is_fresh` | 0 of 37 failed — **VERIFICATION SUCCESSFUL** |
+| clause | lowering | CBMC |
+|---|---|---|
+| `writes (p, n)` | `w_ok` | 10 of 41 failed — **VERIFICATION FAILED** |
+| `pre(fresh(p,n)) assigns(range(p,0,n))` | `is_fresh` | 0 of 37 failed — **SUCCESSFUL** |
 
 Differential-checked against the pre-change header: identical, so this is
-pre-existing, not a regression. But `writes` is the headline role in the fork's
-README and it does not discharge. Either the surface language grows a
-separation concept, or `writes`+`reads` on one call is *defined* to imply
-disjointness and that is documented loudly. **Do not start B3 without settling
-this** — it decides what `prove` is even proving.
+pre-existing and not a regression from the stock-clang target.
+
+What the decision settles:
+
+- **Single-buffer separation needs no new surface.** `fresh(p, n)` is already
+  spelled in all four targets (`c_fresh`, header lines 124 / 174 / 270) and
+  already lowers to `__CPROVER_is_fresh`. It is the concept; it just was not
+  documented as the thing that makes `writes` discharge.
+- **Two-buffer disjointness has no spelling yet.** Add `disjoint(a, b)` ->
+  `c_disjoint(A, B)`, lowering to `!__CPROVER_same_object((A), (B))` under
+  `C_CONTRACTS_CPROVER` and following `c_same_object`'s existing per-target
+  treatment everywhere else (a never-defined `__c_disjoint` on the stock-clang
+  and fork targets, nothing on the strip target). `c_same_object` is the model
+  to copy, line for line.
+- **The README's `writes` examples are wrong for anyone who runs `prove`.**
+  Every example meant to be provable needs `pre(fresh(p, n))` next to its
+  `writes(p, n)`. Fixing them is part of this change, not a follow-up.
+- **`prove` should say this rather than let it surface as 10-of-41 failures.**
+  A function with `writes`/`writes_n` on a pointer parameter and no `fresh` on
+  that same pointer gets a diagnostic naming the clause it is missing. B3 scope.
+
+Cost accepted: a provable buffer-writing function spells two clauses where the
+README used to show one.
+
+**Implemented and measured 2026-09-09.** `c_disjoint` / `disjoint` is in the
+header across the three targets that have a predicate layer, defined as
+`!same_object` so it needs no new never-defined helper on the stock-clang
+target. Lit: 35/35, and the new CHECK was perturbed to confirm it fails when it
+should. Measured with the real toolchain (`proofs/verify-contract.sh`, cbmc
+6.x):
+
+| function | clauses | CBMC |
+|---|---|---|
+| `zero_writes` | `writes (p, n)` | 10 of 139 failed — FAILED |
+| `zero_fresh` | `pre (fresh(p,n))` + `assigns (range(p,0,n))` | 0 of 139 — SUCCESSFUL |
+| `copy` | both `fresh` + `disjoint` | 0 of 139 — SUCCESSFUL |
+
+That reproduces the original finding on the new header, so no regression.
+
+**What the measurement taught, and it changes how `disjoint` must be
+documented and tested.** Two dead ends worth not repeating:
+
+1. `disjoint` cannot be demonstrated on a function whose buffers are both
+   `fresh`: `fresh` already means "distinct from every other object in the
+   proof", so the clause is redundant there and removing it changes nothing.
+2. It also cannot be demonstrated with `writable`/`readable` instead of
+   `fresh`. Both spellings of a `stamp` function that claims `post (src[0] ==
+   old(src[0]))` fail *identically*, 12 of 90, and the postcondition is not
+   among the failures — the `w_ok`-without-`fresh` noise (bad harness storage)
+   swamps it before the aliasing property is ever reached.
+
+The clause bites on the **caller** side, which is where a precondition is an
+obligation rather than an assumption. Enforcing `copy` assumes `disjoint`;
+verifying a caller against `copy`'s contract proves it. The decisive experiment,
+worth keeping as a fixture when `prove` grows a caller mode:
+
+```sh
+goto-instrument --replace-call-with-contract copy cs.goto out.goto
+cbmc --function caller_alias out.goto
+```
+
+with `caller_ok` passing all four preconditions, `caller_alias` (`copy(a, a, 4)`)
+failing precondition **.4**, the `disjoint` one, and that same caller verifying
+SUCCESSFUL once the clause is deleted.
 
 **(b) Vacuity gate in v1?** My argument for yes is in section 5.
 

@@ -89,8 +89,8 @@
  * The bare spellings a contract-aware front end also accepts -- readable, old,
  * result, a p[lo : hi] range, forall (i : lo, hi) P -- are grammar rather than
  * macros, and nothing discards them here. Write c_readable, c_same_object,
- * c_pointer_offset, c_old, c_result, c_range and c_forall in source that has to
- * reach CBMC directly.
+ * c_disjoint, c_pointer_offset, c_old, c_result, c_range and c_forall in source
+ * that has to reach CBMC directly.
  */
 #ifdef C_CONTRACTS_CPROVER
 #undef C_CONTRACTS
@@ -123,6 +123,13 @@
 #define c_writable(P, N) __CPROVER_w_ok((P), (N))
 #define c_fresh(P, N) __CPROVER_is_fresh((P), (N))
 #define c_same_object(P, Q) __CPROVER_same_object((P), (Q))
+/* Separation, spelled so a reader can see it. writes(p, n) says only that the
+ * memory is valid to write; it deliberately claims nothing about aliasing, so a
+ * function that needs two buffers not to overlap has to say which two. Object
+ * level, not range level: two non-overlapping ranges inside one object are not
+ * disjoint by this definition, which is the same granularity is_fresh works at.
+ */
+#define c_disjoint(P, Q) (!__CPROVER_same_object((P), (Q)))
 #define c_pointer_offset(P) __CPROVER_POINTER_OFFSET(P)
 #define c_old(E) __CPROVER_old(E)
 #define c_result __CPROVER_return_value
@@ -173,6 +180,7 @@
 #define c_writable(P, N) writable((P), (N))
 #define c_fresh(P, N) fresh((P), (N))
 #define c_same_object(P, Q) same_object((P), (Q))
+#define c_disjoint(P, Q) (!same_object((P), (Q)))
 #define c_pointer_offset(P) pointer_offset(P)
 #define c_old(E) old(E)
 #define c_result result
@@ -269,6 +277,7 @@ long __c_pointer_offset(const void *);
 #define c_writable(P, N) __c_writable((P), (N))
 #define c_fresh(P, N) __c_fresh((P), (N))
 #define c_same_object(P, Q) __c_same_object((P), (Q))
+#define c_disjoint(P, Q) (!__c_same_object((P), (Q)))
 #define c_pointer_offset(P) __c_pointer_offset(P)
 #define c_ssize_t long
 #define c_range(P, LO, HI) (P)[(LO) : (HI)]
@@ -377,6 +386,7 @@ void __contract_violation(const char *predicate, const char *file,
 #define writable(P, N) c_writable(P, N)
 #define fresh(P, N) c_fresh(P, N)
 #define same_object(P, Q) c_same_object(P, Q)
+#define disjoint(P, Q) c_disjoint(P, Q)
 #define pointer_offset(P) c_pointer_offset(P)
 #define range(P, LO, HI) c_range(P, LO, HI)
 

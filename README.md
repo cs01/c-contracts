@@ -51,6 +51,28 @@ list and a local bound to the return type via `__typeof__`, appends it to the
 translation unit, and reparses -- so the clause is checked with every typedef and
 macro it was written against still in force.
 
+### What `writes` does not say
+
+`writes (p, n)` says the memory is valid to write. It says nothing about
+aliasing: two roles on one call may name the same buffer. A function that needs
+two buffers not to overlap has to say which two, and that clause is what makes
+it provable:
+
+```c
+void copy(void *dst, const void *src, size_t n)
+  writes (dst, n)
+  reads  (src, n)
+  pre    (disjoint(dst, src));
+```
+
+`fresh (p, n)` is the single-buffer form: an object of exactly `n` bytes that
+nothing else the call can see aliases. The distinction is not decoration.
+`writes` alone lowers to CBMC's `w_ok`, which does not discharge a proof of even
+the simplest buffer-writing function; `fresh` lowers to `is_fresh`, which does.
+Both `disjoint` and `fresh` are object level, the granularity `is_fresh` works
+at, so two non-overlapping ranges inside one object are not disjoint by this
+definition.
+
 ```
 $ c-contracts check src/decode.c -- -std=c11 -Iinclude
 src/decode.c:11:3: error: use of undeclared identifier 'dstCapp'; did you mean 'dstCap'?
