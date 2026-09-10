@@ -1,0 +1,4 @@
+lowered 3 clause(s)
+sum has loops without contracts:
+  add contract_assigns / contract_invariant / contract_decreases to each loop
+exit 4

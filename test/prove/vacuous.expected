@@ -1,6 +1,6 @@
-lowered 2 clause(s):
-  __CPROVER_requires(n > 4)
-  __CPROVER_requires(n < 3)
+lowered 2 clause(s)
 mode: enforce (frame checked)
-error: half's preconditions are unsatisfiable -- nothing can call it, so a proof about it proves nothing
-exit 1
+VERIFICATION SUCCESSFUL
+error: half's preconditions are unsatisfiable -- nothing can call it,
+       so a proof about it proves nothing
+exit 5

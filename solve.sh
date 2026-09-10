@@ -26,8 +26,12 @@ command -v cvc5     >/dev/null 2>&1 && CANDIDATES="$CANDIDATES cvc5:--cvc5"
 START=$(date +%s)
 for C in $CANDIDATES; do
   NAME=${C%%:*}; FLAG=${C#*:}
+  # A solver that aborts is a normal outcome of a race -- another one is still
+  # running -- but the subshell would report the signal death to the terminal
+  # over the top of the winner's output. cbmc's own streams are already in the
+  # log, so the subshell has nothing else to say.
   # shellcheck disable=SC2086
-  ( cbmc "$GOTO" $FLAG "$@" > "$W/$NAME.log" 2>&1; echo $? > "$W/$NAME.rc" ) &
+  ( cbmc "$GOTO" $FLAG "$@" > "$W/$NAME.log" 2>&1; echo $? > "$W/$NAME.rc" ) 2>/dev/null &
   echo "$!" > "$W/$NAME.pid"
 done
 

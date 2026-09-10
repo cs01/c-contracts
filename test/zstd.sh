@@ -1,13 +1,12 @@
 #!/bin/sh
-# The tool against real annotated source: zstd's decoder.
+# The header against real annotated source: zstd's decoder.
 #
-#   ZSTD=~/git/zstd test/zstd.sh <path-to-c-contracts>
+#   ZSTD=~/git/zstd test/zstd.sh
 #
-# Fixtures show that the tool does what it was built to do. This shows that it
-# survives a codebase that was not written for it: system headers, intrinsics,
-# macro-heavy inline functions, and a CFG with edges clang records but builds no
-# block for -- which crashed the call-site pass the first time it was pointed
-# here.
+# The fixtures show that the header does what it was built to do. This shows
+# that it survives a codebase that was not written for it: system headers,
+# intrinsics, macro-heavy inline functions, and a translation unit nobody
+# trimmed for a verifier.
 #
 # Each case records the status it is expected to have and the runner fails only
 # on a mismatch. A missing prerequisite is a SKIP: not a pass, since nothing
@@ -15,11 +14,8 @@
 # checkout with the annotation branch on it.
 set -u
 
-TOOL=${1:?usage: zstd.sh <path-to-c-contracts>}
-# Absolute: case 2 runs from test/zstd, so that the proof directory beside the
-# case is the one --proof-dir defaults to.
-TOOL=$(cd "$(dirname "$TOOL")" && pwd)/$(basename "$TOOL")
 DIR=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$DIR/.." && pwd)
 ZSTD=${ZSTD:-$HOME/git/zstd}
 BUDGET=${BUDGET:-60}
 FAILED=0
@@ -48,30 +44,38 @@ fi
 
 CFLAGS="-DNDEBUG -U__ARM_NEON -DZSTD_NO_INTRINSICS -I $ZSTD/lib/common -I $ZSTD/lib"
 
-echo "== c-contracts against $ZSTD =="
+echo "== c_contracts.h against $ZSTD =="
 
 # ------------------------------------------------------------------ case 1
-# Levels 1 and 2 over a real translation unit. The number is informational --
-# it tracks the zstd revision -- but a crash or a zero is not.
+# The annotations survive a real translation unit and lower to CBMC syntax.
+# The number is informational -- it tracks the zstd revision -- but a zero is
+# not: it means the header expanded to nothing where it should have expanded
+# to clauses.
+W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 # shellcheck disable=SC2086
-N=$("$TOOL" --list "$TU" -- $CFLAGS 2>/dev/null | grep -c "condition of")
-RC=$?
-if [ "$RC" -ge 2 ]; then A=FAIL; D="the tool exited $RC"
-elif [ "${N:-0}" -eq 0 ]; then A=FAIL; D="no clauses found"
-else A=PASS; D="$N clauses read out of a stock parse"; fi
-report "1 reads a real translation unit" PASS "$A" "$D"
+if /usr/bin/cc -E -DC_CONTRACTS_CPROVER $CFLAGS "$TU" -o "$W/tu.i" 2>"$W/cpp.log"
+then
+  N=$(grep -oE '__CPROVER_(requires|ensures|assigns|loop_invariant|decreases)\b' \
+        "$W/tu.i" | wc -l | tr -d ' ')
+  if [ "${N:-0}" -eq 0 ]; then A=FAIL; D="no clauses lowered"
+  else A=PASS; D="$N clause(s) lowered from a real translation unit"; fi
+else
+  A=FAIL; D=$(grep -m1 "error:" "$W/cpp.log" | cut -c1-60)
+fi
+report "1 lowers a real translation unit" PASS "$A" "$D"
 
 # ------------------------------------------------------------------ case 2
-# The unbounded memory-safety proof, from the annotations in zstd's own source
-# and a released clang. No length cap: the buffers are symbolically sized, so
-# the loop contracts are what discharge the loops, not an unwind bound.
+# The unbounded memory-safety proof, against the contract in zstd's own source.
+# No length cap: the buffers are symbolically sized, so the loop contract is
+# what discharges the loop, not an unwind bound. -H because wildcopy states its
+# buffers without contract_fresh; see the comment in zstd/wildcopy.c.
 if ! command -v cbmc >/dev/null 2>&1; then
   report "2 ZSTD_wildcopy is memory safe, unbounded" PASS SKIP "no cbmc"
 else
   T0=$(date +%s)
   # shellcheck disable=SC2086
-  OUT=$(cd "$DIR/zstd" && "$TOOL" prove ZSTD_wildcopy wildcopy.c \
-          --timeout="$BUDGET" -- $CFLAGS 2>&1)
+  OUT=$(cd "$DIR/zstd" && TIMEOUT=$BUDGET "$ROOT/prove.sh" harness \
+          wildcopy.c -H $CFLAGS 2>&1)
   E=$(( $(date +%s) - T0 ))
   if printf '%s' "$OUT" | grep -q "VERIFICATION SUCCESSFUL"; then
     if [ "$E" -le "$BUDGET" ]; then A=PASS; D="${E}s, budget ${BUDGET}s"

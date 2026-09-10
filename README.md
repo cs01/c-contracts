@@ -89,6 +89,38 @@ $ ./prove.sh compress source.c -r compress_bound  # prove the caller
 This scales to large codebases. Each proof stays small regardless of the
 call tree below it.
 
+Some functions cannot be entered from their contract alone. A buffer stated
+with `contract_readable`/`contract_writable` and no `contract_fresh` says the
+memory is accessible but not which object it belongs to, so there is nothing
+to allocate. Write an entry point and pass `-H`:
+
+```
+$ ./prove.sh harness wildcopy.c -H -Ilib
+lowered 15 clause(s)
+mode: harness (frame not checked)
+VERIFICATION SUCCESSFUL
+```
+
+The contracts are still checked — preconditions at the call, loop contracts on
+the loops, memory safety throughout. What is not checked is the function's own
+frame, because there is no `contract_assigns` to check it against.
+
+On success `prove.sh` also checks that the preconditions are satisfiable.
+Contradictory preconditions make every property hold vacuously, so CBMC
+reports success and the proof proves nothing:
+
+```
+$ ./prove.sh half vacuous.c -Iinclude
+lowered 2 clause(s)
+mode: enforce (frame checked)
+VERIFICATION SUCCESSFUL
+error: half's preconditions are unsatisfiable -- nothing can call it,
+       so a proof about it proves nothing
+```
+
+Exit status is 0 proved, 10 counterexample, 2 nothing to prove, 4 the
+contract could not be enforced, 5 vacuous.
+
 Needs [CBMC](https://www.cprover.org/cbmc/) 6+ (`goto-cc`,
 `goto-instrument`, `cbmc`).
 
@@ -208,7 +240,13 @@ A function that reads then writes carries both roles.
 
 ## Tests
 
+Nothing to build first — the product is a header and two shell scripts, so the
+gates are the whole of CI. `test/run.sh` runs them all; each one also runs on
+its own. A gate whose prerequisite is missing skips loudly rather than failing.
+
 | gate | needs |
 |---|---|
 | `test/header.sh` | a C compiler |
 | `test/readme.sh` | a C compiler. Compiles this file's examples |
+| `test/prove.sh` | CBMC. Runs `prove.sh` over `test/prove/` |
+| `test/zstd.sh` | CBMC and a zstd checkout carrying the annotations |

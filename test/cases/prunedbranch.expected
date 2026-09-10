@@ -1,2 +1,0 @@
-CASE/prunedbranch.c:10:18: precondition of 'sink': n > 0
-CASE/prunedbranch.c:23:3: warning: precondition n > 0 of 'sink' is violated by this call

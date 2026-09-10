@@ -1,9 +1,12 @@
-/* prove: copy */
-/* contract_disjoint() only bites on the caller's side: enforcing copy's contract
-   ASSUMES the two buffers do not overlap, and only a caller checked against
-   that contract has to prove it. caller_alias passes the same buffer twice and
-   must fail; caller_ok must not. Delete the disjoint clause and the two agree,
-   which is what makes this a test of the clause rather than of CBMC. */
+/* prove: caller_alias -r copy */
+/* prove: caller_ok -r copy */
+/* contract_disjoint() only bites on the caller's side: enforcing copy's own
+   contract ASSUMES the two buffers do not overlap, and only a caller checked
+   against that contract has to prove it. `-r copy` is what makes the caller
+   discharge it instead of inlining the body. caller_alias passes the same
+   buffer twice and must fail; caller_ok must not. Delete the disjoint clause
+   and the two agree, which is what makes this a test of the clause rather
+   than of CBMC. */
 #include <c_contracts.h>
 
 typedef unsigned long size_t;

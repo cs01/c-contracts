@@ -1,10 +1,4 @@
-lowered 6 clause(s):
-  __CPROVER_requires(n > 1 && n < 64)
-  __CPROVER_requires(__CPROVER_is_fresh((p), (n)))
-  __CPROVER_assigns(__CPROVER_object_upto((p) + (0), ((1) - (0)) * sizeof(*(p))))
-  __CPROVER_assigns(i, __CPROVER_object_upto((p) + (0), ((1) - (0)) * sizeof(*(p))))
-  __CPROVER_loop_invariant(i <= n)
-  __CPROVER_decreases(n - i)
+lowered 6 clause(s)
 mode: enforce (frame checked)
-zero: VERIFICATION FAILED
-exit 1
+VERIFICATION FAILED
+exit 10

@@ -1,4 +1,4 @@
 lowered 6 clause(s)
-mode: enforce (frame checked)
+mode: harness (frame not checked)
 VERIFICATION SUCCESSFUL
 exit 0

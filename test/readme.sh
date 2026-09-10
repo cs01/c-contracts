@@ -1,7 +1,7 @@
 #!/bin/sh
 # The README's claims, checked.
 #
-#   test/readme.sh <path-to-c-contracts>
+#   test/readme.sh
 #
 # Every code block in a README is a claim, and this one shipped three broken
 # ones in two days: an example that did not compile, an example that did not
@@ -12,7 +12,6 @@
 # contract_ name the prose mentions has to exist in the header.
 set -u
 
-TOOL=${1:?usage: readme.sh <path-to-c-contracts>}
 DIR=$(cd "$(dirname "$0")" && pwd)
 README=$DIR/../README.md
 HEADER=$DIR/../include/c_contracts.h
@@ -56,13 +55,14 @@ if [ -z "$MISSING" ]; then ok "every contract_ name it mentions exists"
 else bad "every contract_ name it mentions exists" "missing:$MISSING"; fi
 
 # Flags it documents have to be real, or the first thing a reader tries fails.
-# Only the flag tables: prose also names CBMC's own flags, which are not ours.
+# Only prove.sh's own short flags: the prose also names compiler flags and
+# CBMC flags, and neither is ours to promise.
 UNREAL=
-for flag in $(grep -oE '^\| `--[a-z0-9-]+' "$README" | tr -d '|` ' | sort -u); do
-  "$TOOL" --help 2>&1 | grep -q -- "$flag" || UNREAL="$UNREAL $flag"
+for flag in $(grep -oE '`-[a-zA-Z]`' "$README" | tr -d '`' | sort -u); do
+  grep -qE "^ *$flag\)" "$DIR/../prove.sh" || UNREAL="$UNREAL $flag"
 done
 if [ -z "$UNREAL" ]; then ok "every flag it documents is real"
-else bad "every flag it documents is real" "not flags:$UNREAL"; fi
+else bad "every flag it documents is real" "prove.sh does not parse:$UNREAL"; fi
 
 # Gates it lists have to exist.
 GONE=

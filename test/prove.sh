@@ -1,28 +1,26 @@
 #!/bin/sh
-# Runs every case in test/prove against `c-contracts prove` and diffs the
-# output.
+# Runs every case in test/prove through ../prove.sh and diffs the output.
 #
-#   test/prove.sh <path-to-c-contracts> [filter]
+#   test/prove.sh [filter]
 #
-# A case is a .c file. Its .flags file, if present, holds one INVOCATION PER
-# LINE -- the extra tool arguments for that run -- so a case that only means
-# something as a pair (a caller that honours a precondition and one that does
-# not) stays one file. Its .expected is what the tool prints for all of them.
+# A case is a .c file. Every `/* prove: <fn> [args] */` line in it is one
+# invocation of prove.sh, so a case that only means something as a pair -- a
+# caller that honours a precondition and one that does not -- stays one file.
+# Its .expected is what prove.sh prints for all of them, in order.
 #
-# Two things are filtered out of the comparison, both because they are true of
-# the machine rather than of the code: which solver won the race, and CBMC's
-# own property lines, whose indices and line numbers move with the CBMC
-# version. What is left is the tool's own report.
+# The comparison keeps a whitelist, not everything minus a blacklist: CBMC
+# prints its version, its phases, its property lines and whatever library
+# warnings the build happens to emit, and all of that moves with the CBMC
+# version rather than with this repo. What is kept is prove.sh's own report,
+# its diagnostics, the verdict and the exit status.
 #
 # Set UPDATE=1 to rewrite the .expected files. Read the diff first.
 set -u
 
-TOOL=${1:?usage: prove.sh <path-to-c-contracts> [filter]}
-FILTER=${2:-}
+FILTER=${1:-}
 DIR=$(cd "$(dirname "$0")" && pwd)
-INCLUDE=$DIR/../include
-
-CFLAGS="-std=c89 -I$INCLUDE"
+ROOT=$(cd "$DIR/.." && pwd)
+INCLUDE=$ROOT/include
 
 if ! command -v cbmc >/dev/null 2>&1; then
   # A missing prerequisite is not a pass and not a failure. Reporting FAIL here
@@ -31,6 +29,8 @@ if ! command -v cbmc >/dev/null 2>&1; then
   echo "SKIP: cbmc is not installed; the proof suite did not run"
   exit 0
 fi
+
+echo "== prove.sh over test/prove =="
 
 pass=0
 fail=0
@@ -43,46 +43,48 @@ for case in "$DIR"/prove/*.c; do
     *) continue ;;
   esac
 
-  flags=$DIR/prove/$name.flags
   expected=$DIR/prove/$name.expected
-  fn=$(sed -n 's/^\/\* prove: \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' "$case" | head -1)
-  extra_files=$(sed -n 's/^\/\* also: \(.*\) \*\/$/\1/p' "$case" | head -1)
-  # A file with no `prove:` line is a helper another case names in its
-  # `also:` line, not a case of its own. Said out loud rather than skipped
+  actual=
+
+  # One invocation per `prove:` line. Said out loud rather than skipped
   # silently, so a case that simply lost its header is still visible.
-  if [ -z "$fn" ]; then
-    [ "${UPDATE:-0}" = 1 ] || echo "     $name (helper, not a case)"
+  invocations=$(sed -n 's|^/\* prove: \(.*\) \*/$|\1|p' "$case")
+  if [ -z "$invocations" ]; then
+    echo "     $name (no prove: line, not a case)"
     continue
   fi
 
-  # One invocation per line of .flags, and one for a case that has none. Both
-  # streams into one capture: prove writes stdout unbuffered precisely so that
-  # a warning stays next to what it is about, and this is where that is pinned.
-  { [ -f "$flags" ] && cat "$flags"; echo; } | while IFS= read -r extra; do
-    [ -f "$flags" ] && [ -z "$extra" ] && continue
+  # Both streams into one capture: prove.sh writes its report to stdout and its
+  # diagnostics to stderr, and a diagnostic belongs next to what it is about.
+  actual=$(printf '%s\n' "$invocations" | while IFS= read -r inv; do
+    [ -n "$inv" ] || continue
+    # The first word is the function; anything after it is extra prove.sh
+    # arguments for this invocation.
+    fn=${inv%% *}
+    rest=${inv#"$fn"}
+    # Run from the case directory so the paths in diagnostics are the bare
+    # file name and do not carry whoever's checkout this is.
     # shellcheck disable=SC2086
-    # shellcheck disable=SC2086
-    out=$("$TOOL" prove "$fn" "$case" ${extra_files:+$DIR/prove/$extra_files} \
-            $extra -- $CFLAGS 2>&1)
+    out=$(cd "$DIR/prove" && "$ROOT/prove.sh" "$fn" "$name.c" $rest \
+            -I "$INCLUDE" 2>&1)
     printf '%s\nexit %s\n' "$out" "$?"
-  done > "$DIR/prove/.$name.actual"
-  actual=$(grep -v '^    \[' "$DIR/prove/.$name.actual" |
-           grep -v '^solved by ' | grep -v '^$' | sed "s|$DIR/prove|CASE|g")
-  rm -f "$DIR/prove/.$name.actual"
+  done | grep -E '^lowered |^mode: |^error: |^ +so a proof|^VERIFICATION |'\
+'has loops without contracts|^  add contract_|^ +not found|^exit ')
 
   if [ "${UPDATE:-0}" = 1 ]; then
     printf '%s\n' "$actual" > "$expected"
-    echo "updated $name"
+    echo "  updated $name"
     continue
   fi
 
   if [ ! -f "$expected" ]; then
-    echo "FAIL $name (no $name.expected; run with UPDATE=1)"
+    echo "  FAIL $name (no $name.expected; run with UPDATE=1)"
     fail=$((fail + 1)); failed="$failed $name"
   elif [ "$actual" = "$(cat "$expected")" ]; then
+    printf '  %-20s ok\n' "$name"
     pass=$((pass + 1))
   else
-    echo "FAIL $name"
+    echo "  FAIL $name"
     printf '%s\n' "$actual" | diff -u "$expected" - | sed 's/^/    /'
     fail=$((fail + 1)); failed="$failed $name"
   fi
@@ -90,6 +92,7 @@ done
 
 [ "${UPDATE:-0}" = 1 ] && exit 0
 
+echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ] || { echo "failed:$failed"; exit 1; }
 exit 0

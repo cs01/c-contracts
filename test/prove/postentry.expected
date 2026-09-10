@@ -1,6 +1,4 @@
-lowered 2 clause(s):
-  __CPROVER_requires(n > 0 && n < 100)
-  __CPROVER_ensures(__CPROVER_return_value == n)
+lowered 2 clause(s)
 mode: enforce (frame checked)
-bump: VERIFICATION FAILED
-exit 1
+VERIFICATION FAILED
+exit 10

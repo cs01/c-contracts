@@ -9,10 +9,9 @@
  * Annotations that vanish under a compiler that does not understand them.
  *
  * This header is the annotation language. The contract grammar it expands to is
- * one of four targets, chosen at include time:
+ * one of three targets, chosen at include time:
  *
- *   contract-aware front end   __has_feature(c_contracts): pre/post/assigns
- *   CBMC directly              -DC_CONTRACTS_CPROVER: __CPROVER_requires etc.
+ *   CBMC                       -DC_CONTRACTS_CPROVER: __CPROVER_requires etc.
  *   stock clang                __has_attribute(diagnose_if): preconditions
  *                              checked at every call site, the rest quoted
  *                              into annotate markers for c-contracts to read
@@ -21,6 +20,28 @@
  * Annotated source stays buildable by GCC, MSVC, tcc and stock clang, at any
  * standard level from C89 on, with no second code path -- every target produces
  * the same declaration.
+ *
+ * Roles -- contract_reads and contract_writes -- are what to reach for; the
+ * clauses each target lowers them to are below. contract_writes covers both the
+ * caller's obligation to supply the memory and the promise that nothing outside
+ * it changes, because a function that writes a buffer always means both.
+ *
+ * There are two roles, not three. A function that reads a buffer and then
+ * writes it carries both, and the difference that matters is stated by their
+ * combination rather than by a third name: contract_reads is what obliges the
+ * caller to have initialized the memory. memset only writes; buf[i] *= 2 does
+ * both. A pure reader needs contract_writes_nothing() to say so, because an
+ * annotation with no write role and no contract_assigns makes no claim about
+ * the frame at all.
+ *
+ * A count is in BYTES, matching memcpy and every C interface that pairs a
+ * void * with a size. The _n forms count ELEMENTS of a typed pointer.
+ *
+ * Below the roles is the primitive layer -- contract_pre, contract_post,
+ * contract_assigns and the predicates they name. Reach for it when a role
+ * cannot say it: a global in the frame, a partial write, a relation between two
+ * parameters. contract_returns(P) is contract_post with the result already
+ * bound to contract_result, so nothing has to bind it by hand.
  *
  * This file is self-contained and intended to be vendored: copy it into a
  * project rather than depending on a particular compiler shipping it. It is
@@ -60,25 +81,15 @@
 #define contract_ghost
 #endif
 
-#ifdef __has_feature
-#if __has_feature(c_contracts)
-#define C_CONTRACTS 1
-#endif
-#endif
-
-#ifndef C_CONTRACTS
-#define C_CONTRACTS 0
-#endif
-
 /* Stock clang understands no contract grammar, but it does understand
  * diagnose_if, whose argument is parsed in the function's own prototype scope.
  * That is the whole of what a precondition needs, so a released clang can check
- * one without any of the machinery below it. Selected only when no
- * contract-aware front end and no direct CBMC target already claimed the file.
+ * one with no tooling at all. Selected only when the direct CBMC target has not
+ * already claimed the file.
  */
 #ifdef __has_attribute
-#if __has_attribute(diagnose_if) && !C_CONTRACTS &&                            \
-    !defined(C_CONTRACTS_CPROVER) && !defined(C_CONTRACTS_STOCK)
+#if __has_attribute(diagnose_if) && !defined(C_CONTRACTS_CPROVER) &&           \
+    !defined(C_CONTRACTS_STOCK)
 #define C_CONTRACTS_STOCK 1
 #endif
 #endif
@@ -94,24 +105,19 @@
  * how the strip target is tested. */
 
 /* Define C_CONTRACTS_CPROVER before including this header to target CBMC's own
- * front end directly, with no contract-aware compiler in the pipeline:
+ * front end:
  *
  *   goto-cc -DC_CONTRACTS_CPROVER -o f.goto f.c
  *   goto-instrument --enforce-contract f f.goto f-chk.goto
  *   cbmc --function f --pointer-check --bounds-check f-chk.goto
  *
- * The same annotated source then reaches a verifier through three independent
- * paths, which is the point of putting the language in a header.
- *
- * Everything in the language survives this mode. The bare spellings a
- * contract-aware front end also accepts -- readable, old, result, a p[lo : hi]
- * range, forall (i : lo, hi) P -- are its grammar rather than macros, and
- * nothing here discards them; the contract_ names are what a translation unit
- * targeting CBMC directly has to use.
+ * This is the only target that verifies anything, and the only one where every
+ * clause in the language survives: the frame, the loop contracts and the
+ * quantifiers all reach CBMC intact. Preprocessing the same annotated source
+ * two ways -- once for the compiler, once for the verifier -- is the point of
+ * putting the language in a header.
  */
 #ifdef C_CONTRACTS_CPROVER
-#undef C_CONTRACTS
-#define C_CONTRACTS 0
 
 #define contract_reads(P, N)                                                          \
   __CPROVER_requires((P) != 0) __CPROVER_requires(__CPROVER_r_ok((P), (N)))
@@ -165,77 +171,10 @@
 #define contract_object_from(P) __CPROVER_object_from(P)
 #define contract_obeys(F, C) __CPROVER_obeys_contract((F), (C))
 
-#elif C_CONTRACTS
-
-/* Roles: what the function does to a buffer. A role is the spelling to reach
- * for; the clauses below are what it lowers to. contract_writes covers both the
- * caller's obligation to supply the memory and the promise that nothing outside
- * it changes, because a function that writes a buffer always means both.
- *
- * There are two roles, not three. A function that reads a buffer and then
- * writes it carries both, and the difference that matters is stated by their
- * combination rather than by a third name: contract_reads is what obliges the caller
- * to have initialized the memory. memset only writes; buf[i] *= 2 does both.
- *
- * A count is in BYTES, matching memcpy and every C interface that pairs a
- * void * with a size. The _n forms count ELEMENTS of a typed pointer.
- */
-#define contract_reads(P, N) pre((P) != 0) pre(readable((P), (N)))
-#define contract_writes(P, N)                                                         \
-  pre((P) != 0) pre(writable((P), (N))) assigns(((char *)(P))[0 : (N)])
-
-#define contract_reads_n(P, N) pre((P) != 0) pre(readable((P), (N) * sizeof(*(P))))
-#define contract_writes_n(P, N)                                                       \
-  pre((P) != 0) pre(writable((P), (N) * sizeof(*(P)))) assigns((P)[0 : (N)])
-
-/* The function writes nothing a caller can observe. An annotation with no write
- * role and no contract_assigns makes no claim about the frame at all, so a pure reader
- * needs this to say so.
- */
-#define contract_writes_nothing() assigns()
-
-/* The result, under a fixed name, so nothing has to be bound by hand. */
-#define contract_returns(P) post(result : P)
-
-/* Prefixed spellings of the predicates that appear inside a clause. Under a
- * contract-aware front end these are the keywords and intrinsics themselves, so
- * the short names work too; the c_ forms are what a translation unit targeting
- * CBMC directly has to use, since nothing discards them there.
- */
-#define contract_readable(P, N) readable((P), (N))
-#define contract_writable(P, N) writable((P), (N))
-#define contract_fresh(P, N) fresh((P), (N))
-#define contract_same_object(P, Q) same_object((P), (Q))
-#define contract_disjoint(P, Q) (!same_object((P), (Q)))
-#define contract_pointer_offset(P) pointer_offset(P)
-#define contract_old(E) old(E)
-#define contract_result result
-#define contract_ssize_t long
-#define contract_range(P, LO, HI) (P)[(LO) : (HI)]
-#define contract_forall(I, LO, HI, P) forall(I : LO, HI)(P)
-
-/* The primitive layer. Reach for these when a role cannot say it: a global in
- * the frame, a partial write, a relation between two parameters.
- */
-#define contract_pre(P) pre(P)
-#define contract_post(P) post(P)
-#define contract_assigns(L) assigns(L)
-#define contract_locations(A, B) A, B
-#define contract_invariant(P) loop_invariant(P)
-#define contract_decreases(M) decreases(M)
-#define contract_frees(L) frees(L)
-#define contract_freeable(P) freeable(P)
-#define contract_was_freed(P) was_freed(P)
-#define contract_exists(I, LO, HI, P) exists(I : LO, HI)(P)
-#define contract_loop_entry(E) loop_entry(E)
-#define contract_object_whole(P) object_whole(P)
-#define contract_object_from(P) object_from(P)
-#define contract_obeys(F, C) obeys_contract((F), (C))
-
 #elif C_CONTRACTS_STOCK
 
-/* Stock clang. Preconditions become diagnose_if, which is the same three things
- * a contract-aware front end gives them: the parameters are in scope, the
+/* Stock clang. Preconditions become diagnose_if, which gives them the three
+ * things a precondition needs from a compiler: the parameters are in scope, the
  * predicate is type-checked, and a call whose arguments make it false is a
  * warning at the call site, under -Wuser-defined-warnings.
  *

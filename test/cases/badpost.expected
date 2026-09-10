@@ -1,8 +1,0 @@
-CASE/badpost.c:7:36: postcondition of 'a': contract_result <= dstCapp
-CASE/badpost.c:10:16: postcondition of 'b': contract_result == 0
-CASE/badpost.c:14:19: postcondition of 'c': contract_result <= n
-CASE/badpost.c:17:20: postcondition of 'd': contract_result <= n
-CASE/badpost.c:20:20: postcondition of 'e': contract_result <= contract_old(n)
-CASE/badpost.c:7:36: error: use of undeclared identifier 'dstCapp'; did you mean 'dstCap'?
-CASE/badpost.c:10:16: error: use of undeclared identifier 'contract_result'
-CASE/badpost.c:14:19: error: invalid operands to binary expression ('typeof (c(n))' (aka 'struct S') and 'int')
