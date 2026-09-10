@@ -1,10 +1,11 @@
 # Worksheet: contracts for C without a clang fork
 
-Started 2026-09-09. Status: phase 1 and the tool skeleton are done and
-committed; the three ports below are not started.
+Started 2026-09-09. Status: phase 1, the tool skeleton and **B2 are done and
+committed**. All three open questions in section 7 are settled. B3 is the only
+port left.
 
 A fresh agent should be able to finish from this file alone. Read it, then read
-`README.md` for what the thing is, then start at "Next: B2".
+`README.md` for what the thing is, then start at "Next: B3" in section 5.
 
 ---
 
@@ -110,12 +111,34 @@ t.c:11:16: error: use of undeclared identifier 'c_result'
 t.c:15:19: error: invalid operands to binary expression ('typeof (c(n))' (aka 'struct S') and 'int')
 ```
 
-## 4. Next: B2 — the call-site dataflow pass
+## 4. DONE: B2 — the call-site dataflow pass
 
 **Why it is needed even though `diagnose_if` exists.** Clang only fires when the
 condition folds against the actual argument *expressions*. `int n = 0;
 allocate(n);` folds nothing. The fork's pass is a CFG dataflow that tracks
 variables and catches it. That is the whole of level 2's value over level 1.
+
+**Landed 2026-09-09** as `src/CallSite.{h,cpp}`, wired into
+`CheckConsumer::HandleTranslationUnit`, with `test/cases/callsite.c`. Suite 4 ->
+5. The rest of this section is kept because it records why the pass is shaped
+the way it is; the two notes below are what actually changed against the plan.
+
+**What the plan got wrong.** `valueFromPost` could not be ported at all and
+returns unknown: `Clause::Cond` is null for Post and Returns, so the
+compositional case (`p = allocate(n); use(p);` learning non-null from
+`allocate`'s postcondition) is unavailable out of tree. That is the real
+precision cost of not having the fork.
+
+**A second place the same invariant bites, which the plan did not anticipate.**
+Keying the *substitution* on parameter index fixes `checkCall`, but entry
+seeding writes through `refine` into `State`, which was keyed on raw
+`VarDecl*`. A contract spelled on a prototype names the prototype's
+`ParmVarDecl`s while the body names the definition's, so the function's own
+preconditions silently seeded nothing in the ordinary header-plus-`.c` layout --
+a missing report rather than a false one, which is why every test stayed green.
+`trackingKey` canonicalises every `State` and `AddressTaken` key to
+`(canonical decl, parameter index)`. The fixture's case 5 was a *negative* test
+and so could not catch it; case 5b is the positive one that does.
 
 **Source:** `~/git/llvm-contracts/clang/lib/Analysis/ContractChecking.cpp`, 854
 lines, and its header

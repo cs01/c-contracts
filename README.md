@@ -102,9 +102,16 @@ Working: clause extraction, postcondition type checking, call-site precondition
 warnings (from clang itself). `post` and `pre` are both checked by a stock clang
 with no tool installed; `returns` and the frame are what the tool is for.
 
-Not yet ported from the reference implementation: the call-site dataflow pass,
-which catches a violation through a variable where constant folding cannot, and
-the CBMC emitter behind `c-contracts prove`.
+The call-site dataflow pass is in: a violation that travels through a variable,
+which constant folding cannot see, is reported at the call site.
+
+```
+$ c-contracts check demo.c -- -std=c89 -Iinclude
+demo.c:19:3: warning: precondition n > 0 of 'allocate' is violated by this call
+```
+
+Not yet ported from the reference implementation: the CBMC emitter behind
+`c-contracts prove`.
 
 The reference implementation is a clang fork that parses all of this as real
 grammar. It is not shipped and not required; it exists as the differential
