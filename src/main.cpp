@@ -29,6 +29,8 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
+
 using namespace clang;
 using namespace ccontracts;
 
@@ -113,7 +115,10 @@ llvm::cl::opt<bool> KeepWork("keep-work",
 /// subcommand was asked for.
 std::string ProveFunction;
 
-/// What prove exited with, since it runs inside the AST consumer.
+/// The worst status any proved translation unit reported, since prove runs
+/// inside the AST consumer and there may be several. Assigning here rather than
+/// accumulating made the exit code depend on which file was listed last, so a
+/// run whose last file passed reported success however many had failed.
 int ProveStatus = 0;
 
 /// Clang's own headers, from the LLVM this was built against. Every parse the
@@ -216,7 +221,7 @@ public:
     warnOnStaleHeader(Contracts);
 
     if (!ProveFunction.empty()) {
-      ProveStatus = prove(Contracts, Ctx);
+      ProveStatus = std::max(ProveStatus, prove(Contracts, Ctx));
       return;
     }
 

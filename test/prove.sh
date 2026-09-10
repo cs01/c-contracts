@@ -46,9 +46,13 @@ for case in "$DIR"/prove/*.c; do
   flags=$DIR/prove/$name.flags
   expected=$DIR/prove/$name.expected
   fn=$(sed -n 's/^\/\* prove: \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' "$case" | head -1)
+  extra_files=$(sed -n 's/^\/\* also: \(.*\) \*\/$/\1/p' "$case" | head -1)
+  # A file with no `prove:` line is a helper another case names in its
+  # `also:` line, not a case of its own. Said out loud rather than skipped
+  # silently, so a case that simply lost its header is still visible.
   if [ -z "$fn" ]; then
-    echo "FAIL $name (no '/* prove: <function> */' line)"
-    fail=$((fail + 1)); failed="$failed $name"; continue
+    [ "${UPDATE:-0}" = 1 ] || echo "     $name (helper, not a case)"
+    continue
   fi
 
   # One invocation per line of .flags, and one for a case that has none. Both
@@ -57,7 +61,9 @@ for case in "$DIR"/prove/*.c; do
   { [ -f "$flags" ] && cat "$flags"; echo; } | while IFS= read -r extra; do
     [ -f "$flags" ] && [ -z "$extra" ] && continue
     # shellcheck disable=SC2086
-    out=$("$TOOL" prove "$fn" "$case" $extra -- $CFLAGS 2>&1)
+    # shellcheck disable=SC2086
+    out=$("$TOOL" prove "$fn" "$case" ${extra_files:+$DIR/prove/$extra_files} \
+            $extra -- $CFLAGS 2>&1)
     printf '%s\nexit %s\n' "$out" "$?"
   done > "$DIR/prove/.$name.actual"
   actual=$(grep -v '^    \[' "$DIR/prove/.$name.actual" |

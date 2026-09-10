@@ -330,12 +330,17 @@ The last three skip when their prerequisite is missing.
 
 ## Status
 
-`prove` is where the value is and it is the least finished part: no
-project-level runs, no caching, no proof reports, and a generated entry point
-that handles the easy cases and falls back to a hand-written one otherwise. That
-ordering is the current problem with this repo, not a description of a plan.
+The header is done, and it is what this repo adds: the proving is CBMC's.
 
-The header is done. `check` is in.
+`prove` is the least finished part, and it is also the part a user gets value
+from, which is the wrong way round. It takes several files but only one function
+name per run, and cannot find the annotated functions itself. It caches nothing,
+so every run re-solves from scratch. It emits text and no report. Its generated
+entry point discharges all seven proof fixtures and the one real zstd function
+needed a hand-written one instead.
+
+`check` is in, and does less than the tier table above may suggest: it is spec
+hygiene, not bug finding.
 
 `docs/` has the working record and two clang defects this ran into, written up
 ready to file.
