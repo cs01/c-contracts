@@ -18,8 +18,9 @@
 #include "clang/Analysis/CFG.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
+#include <algorithm>
 #include <optional>
 
 using namespace clang;
@@ -740,6 +741,41 @@ void CallSiteChecker::checkCall(const State &S, const CallExpr *Call) {
   }
 }
 
+/// Reverse post-order over \p Cfg, skipping the null successors an edge clang
+/// recorded but built no block for.
+///
+/// llvm::ReversePostOrderTraversal<CFG *> cannot be used for this.
+/// GraphTraits<CFG *> hands po_iterator a CFGBlock::succ_iterator, whose
+/// CFGBlock * is null on such an edge, and po_iterator dereferences it to reach
+/// the child's own successors. Real code gets there: the first zstd translation
+/// unit this pass was pointed at crashed on it.
+std::vector<const CFGBlock *> reversePostOrder(CFG *Cfg) {
+  std::vector<const CFGBlock *> Order;
+  llvm::SmallPtrSet<const CFGBlock *, 32> Seen;
+  llvm::SmallVector<std::pair<const CFGBlock *, CFGBlock::const_succ_iterator>>
+      Stack;
+
+  const CFGBlock *Root = &Cfg->getEntry();
+  Seen.insert(Root);
+  Stack.push_back({Root, Root->succ_begin()});
+  while (!Stack.empty()) {
+    const CFGBlock *B = Stack.back().first;
+    // Incremented before the push below, so reallocation cannot reach it.
+    const CFGBlock *Succ = nullptr;
+    if (Stack.back().second != B->succ_end())
+      Succ = *Stack.back().second++;
+    else {
+      Order.push_back(B);
+      Stack.pop_back();
+      continue;
+    }
+    if (Succ && Seen.insert(Succ).second)
+      Stack.push_back({Succ, Succ->succ_begin()});
+  }
+  std::reverse(Order.begin(), Order.end());
+  return Order;
+}
+
 void CallSiteChecker::run() {
   const auto *FD = dyn_cast_or_null<FunctionDecl>(AC.getDecl());
   CFG *Cfg = AC.getCFG();
@@ -771,7 +807,7 @@ void CallSiteChecker::run() {
   // exit edge and the pass invents reports for `int n = 0; for (...) n = i + 1;
   // f(n);`. The merge only keeps identical facts from every predecessor. The
   // bound is a backstop against a lattice change, not a practical limit.
-  llvm::ReversePostOrderTraversal<CFG *> RPO(Cfg);
+  std::vector<const CFGBlock *> RPO = reversePostOrder(Cfg);
   auto sameState = [](const State &A, const State &B) {
     if (A.size() != B.size())
       return false;
