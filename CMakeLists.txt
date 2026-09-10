@@ -54,5 +54,9 @@ add_test(NAME proofs
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/prove.sh $<TARGET_FILE:c-contracts>)
 add_test(NAME differential
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/differential.sh $<TARGET_FILE:c-contracts>)
+add_test(NAME readme
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/readme.sh $<TARGET_FILE:c-contracts>)
+add_test(NAME header
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/header.sh)
 add_test(NAME zstd
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/zstd.sh $<TARGET_FILE:c-contracts>)

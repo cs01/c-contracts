@@ -40,6 +40,18 @@ declaration; a clang with `diagnose_if` goes further and type-checks them.
 curl -O https://raw.githubusercontent.com/cs01/c-contracts/main/include/c_contracts.h
 ```
 
+Copy it into your tree and commit it. It is C89, has no `#include` of its own,
+and defines `C_CONTRACTS_VERSION` so you can tell which copy you have:
+
+```c
+#if C_CONTRACTS_VERSION < 3
+#error "c_contracts.h is too old"
+#endif
+```
+
+`c-contracts` reports a header older than the one it was built against, rather
+than silently finding fewer clauses.
+
 Against zstd's decoder this proves `ZSTD_wildcopy` memory-safe for every length
 in two seconds, and found undefined behaviour on the first run: `(BYTE*)dst -
 (const BYTE*)src` computed before the branch that is the only case where the two
@@ -83,6 +95,11 @@ a solver. Only the last column is a guarantee.
 $ c-contracts check <file> -- <your compile flags>
 ```
 
+| flag | does |
+|---|---|
+| `--list` | print every clause it found, with where you wrote it |
+| `--warnings-as-errors` | exit non-zero on any contract problem, for CI |
+
 `check` also type-checks `contract_returns (...)`, which needs the return type
 bound to a name and so cannot ride on `diagnose_if`.
 
@@ -110,6 +127,13 @@ to be said by hand.
 | `--bound n=N` | cap a size the contract leaves open |
 | `--unwind=N` | unwind bound, with unwinding assertions on |
 | `--no-vacuity` | skip the check that the preconditions are satisfiable at all |
+| `--solver=X` | pin one solver instead of racing them |
+| `--timeout=N` | seconds any one step may take. Default 900 |
+| `--proof-dir=D` | where `<function>.proof.c` may override the generated entry point |
+| `--cbmc-flag=X` | passed straight through to `cbmc` |
+| `--cc=X` | the preprocessor that lowers the clauses. Default `cc` |
+| `--verbose` | print what CBMC printed |
+| `--keep-work` | keep the working directory and say where it is |
 
 Three things it does that a shell script around CBMC does not:
 
@@ -296,6 +320,7 @@ ninja -C build
 | gate | needs |
 |---|---|
 | `test/header.sh` | a C compiler |
+| `test/readme.sh` | a C compiler. Compiles this file's examples |
 | `test/run.sh` | the tool |
 | `test/prove.sh` | `cbmc` 6+ |
 | `test/differential.sh` | the reference clang fork |

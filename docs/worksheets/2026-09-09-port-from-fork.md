@@ -787,7 +787,17 @@ drops `prove` into harness mode with no bound, where it does not terminate. The
 roles table also showed `((char *)p)[0 : n]`, which is the fork's grammar: the
 header drops it silently and goto-cc then rejects it.
 
-There is no gate on the README. That is the obvious next one.
+**Fixed 2026-09-10: `test/readme.sh`.** It compiles every fenced `c` block that
+is a whole translation unit, and checks that every `contract_` name the prose
+mentions exists in the header, that every flag in a flag table is a real flag,
+and that every `test/*.sh` it lists exists. Needs only a C compiler.
+
+Gate-audited five ways: dropping an include from the example, a typo inside a
+clause, a table row naming a clause that does not exist, a flag table naming a
+flag the tool does not have, and a renamed gate. All five fire.
+
+It immediately found a content gap nothing else would have: `check` had **no
+flag documentation at all**, and eight of `prove`'s flags were undocumented.
 
 ### `__CPROVER_pointer_in_range` is unsatisfiable under `--enforce-contract`
 
@@ -821,7 +831,6 @@ inside. Always run the `assert(0)` probe before believing a SUCCESSFUL.
    four embedded OSes) measures 87 minutes to write a proof and 61 minutes to
    run one; without caching a suite is unusable. This is the thing standing
    between the tool and a user.
-3. **A gate on the README's examples.** See above.
 4. **Three unit conventions.** `contract_writes(p, n)` is bytes,
    `contract_writes_n(p, n)` is elements, `contract_range(p, lo, hi)` is
    elements and half open. Each has a reason; together they are a trap. No fix
