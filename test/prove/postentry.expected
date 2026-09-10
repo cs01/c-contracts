@@ -2,6 +2,5 @@ lowered 2 clause(s):
   __CPROVER_requires(n > 0 && n < 100)
   __CPROVER_ensures(__CPROVER_return_value == n)
 mode: enforce (frame checked)
-vacuity: bump's preconditions are satisfiable
 bump: VERIFICATION FAILED
 exit 1

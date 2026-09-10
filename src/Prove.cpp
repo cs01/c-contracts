@@ -597,9 +597,12 @@ int runProve(const Contract &C, llvm::StringRef File,
             "unchecked\n";
       if (Opts.Verbose)
         ES << Probe.Out << Probe.Err;
-    } else {
-      OS << "vacuity: " << Fn << "'s preconditions are satisfiable\n";
     }
+    // Nothing is printed when the probe passes. A check that narrates its own
+    // success on every run is noise, and the whole reason this gate exists is
+    // that its FAILURE is silent -- so that is the only thing worth a line.
+    else if (Opts.Verbose)
+      OS << "vacuity: " << Fn << "'s preconditions are satisfiable\n";
   } else if (Opts.Vacuity && HandWritten) {
     OS << "vacuity: not checked -- a hand-written entry point carries its own "
           "assumptions\n";

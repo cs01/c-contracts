@@ -6,6 +6,5 @@ lowered 6 clause(s):
   __CPROVER_loop_invariant(i <= n)
   __CPROVER_decreases(n - i)
 mode: enforce (frame checked)
-vacuity: zero's preconditions are satisfiable
 zero: VERIFICATION FAILED
 exit 1

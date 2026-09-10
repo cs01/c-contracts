@@ -5,6 +5,5 @@ lowered 3 clause(s):
   __CPROVER_assigns(__CPROVER_object_upto(((char *)(p)), (n)))
 note: the frame is not checked -- a loop in zero_writes carries no contract, so the proof runs from the generated entry point instead
 mode: harness (frame not checked)
-vacuity: zero_writes's preconditions are satisfiable
 zero_writes: VERIFICATION FAILED
 exit 1
