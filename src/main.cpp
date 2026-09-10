@@ -9,11 +9,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "CallSite.h"
 #include "Contract.h"
 
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Analysis/AnalysisDeclContext.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/CompilerInstance.h"
@@ -72,6 +74,50 @@ private:
   std::vector<Contract> &Out;
 };
 
+/// Every function this translation unit has a body for: the bodies the
+/// call-site pass can build a CFG over.
+class BodyCollector : public RecursiveASTVisitor<BodyCollector> {
+public:
+  explicit BodyCollector(std::vector<const FunctionDecl *> &Out) : Out(Out) {}
+
+  bool VisitFunctionDecl(FunctionDecl *FD) {
+    if (FD->hasBody() && FD->isThisDeclarationADefinition())
+      Out.push_back(FD);
+    return true;
+  }
+
+private:
+  std::vector<const FunctionDecl *> &Out;
+};
+
+/// Turns what the call-site pass finds into the tool's own diagnostics.
+///
+/// The wording is the contract-aware front end's, verbatim, so the two
+/// implementations can be diffed against each other on the same source.
+class Reporter : public ContractViolationReporter {
+public:
+  explicit Reporter(const SourceManager &SM) : SM(SM) {}
+
+  void reportPreconditionViolated(const CallExpr *Call,
+                                  const FunctionDecl *Callee,
+                                  const Clause &C) override {
+    report(SM, Call->getBeginLoc(), /*IsError=*/false,
+           "precondition " + C.Text + " of '" + Callee->getName().str() +
+               "' is violated by this call");
+  }
+
+  void reportPreconditionNotGuaranteed(const CallExpr *Call,
+                                       const FunctionDecl *Callee,
+                                       const Clause &C) override {
+    report(SM, Call->getBeginLoc(), /*IsError=*/false,
+           "precondition " + C.Text + " of '" + Callee->getName().str() +
+               "' is not guaranteed by the constraints at this call");
+  }
+
+private:
+  const SourceManager &SM;
+};
+
 class CheckConsumer : public ASTConsumer {
 public:
   explicit CheckConsumer(std::vector<std::string> Args)
@@ -93,6 +139,18 @@ public:
     for (const GhostDiagnostic &D :
          checkClausesInGhostScope(Contracts, Ctx, Args))
       report(SM, D.Loc, D.IsError, D.Message);
+
+    // Clang's own diagnose_if only fires when the condition folds against the
+    // argument expressions, so a violation that travels through a variable
+    // reaches nobody. That is what this pass is here for.
+    std::vector<const FunctionDecl *> Bodies;
+    BodyCollector(Bodies).TraverseDecl(Ctx.getTranslationUnitDecl());
+
+    AnalysisDeclContextManager Mgr(Ctx);
+    Reporter R(SM);
+    for (const FunctionDecl *FD : Bodies)
+      if (AnalysisDeclContext *AC = Mgr.getContext(FD))
+        runCallSiteChecking(*AC, R);
   }
 
 private:

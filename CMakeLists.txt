@@ -16,6 +16,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(c-contracts
   src/main.cpp
+  src/CallSite.cpp
   src/Extract.cpp
   src/Ghost.cpp
 )

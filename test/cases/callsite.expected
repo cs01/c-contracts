@@ -1,0 +1,10 @@
+CASE/callsite.c:10:25: precondition of 'allocate': n > 0
+CASE/callsite.c:11:24: precondition of 'bounded': n < 10
+CASE/callsite.c:75:25: precondition of 'forwards': n > 0
+CASE/callsite.c:87:31: precondition of 'forwards_split': n == 0
+CASE/callsite.c:96:18: precondition of 'scale': k != 0
+CASE/callsite.c:19:3: warning: precondition n > 0 of 'allocate' is violated by this call
+CASE/callsite.c:26:3: warning: precondition n > 0 of 'allocate' is violated by this call
+CASE/callsite.c:90:3: warning: precondition n > 0 of 'allocate' is violated by this call
+CASE/callsite.c:102:3: warning: precondition k != 0 of 'scale' is violated by this call
+CASE/callsite.c:110:5: warning: precondition n < 10 of 'bounded' is not guaranteed by the constraints at this call
