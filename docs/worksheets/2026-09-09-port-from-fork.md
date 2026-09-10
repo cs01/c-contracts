@@ -424,9 +424,22 @@ are each reported exactly once, from their two different checkers).
 
 ## 8. Not verified locally
 
-**Real GCC.** No gcc on this machine; `/usr/bin/gcc` is Apple clang. The
-stock-clang branch is guarded by `__has_attribute(diagnose_if)`, which GCC
-answers 0 to, so it is safe by construction — but construction is not a test.
-Someone with a real gcc should run `gcc -std=c89 -pedantic -Wall -Wextra` over
-`test/cases/*.c` and confirm silence. Same for MSVC and tcc, which the fork's
-README also claims.
+**Real GCC.** Still no gcc on this machine, and no tcc; `/usr/bin/gcc` is Apple
+clang. Someone with a real gcc should still run `gcc -std=c89 -pedantic -Wall
+-Wextra` over `test/cases/*.c` and confirm silence, and the same for MSVC.
+
+What *is* now tested, 2026-09-09, is the branch those compilers land on. It had
+no coverage at all, which is the worse half of the problem: clang always has
+`diagnose_if`, so the strip branch was unreachable from lit and nothing checked
+the header's headline promise. Autodetection now only fires when
+`C_CONTRACTS_STOCK` is not already set, so `-DC_CONTRACTS_STOCK=0` reaches that
+branch from a clang (and doubles as the switch for a build that wants the
+annotations present but inert). `clang/test/Sema/c-contracts-macro-strip.c` pins
+that every clause preprocesses away to the bare declaration -- no attribute, no
+annotate string, no leftover predicate call needing a definition at link time --
+that a loop header is untouched, and that the result is clean under `-std=c89
+-pedantic -Wall -Wextra`. Gate-audited by removing the guard and confirming the
+test fails.
+
+That leaves only *GCC's own preprocessor and parser* unverified, rather than the
+header's behaviour on that branch.

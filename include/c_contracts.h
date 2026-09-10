@@ -66,7 +66,7 @@
  */
 #ifdef __has_attribute
 #if __has_attribute(diagnose_if) && !C_CONTRACTS &&                            \
-    !defined(C_CONTRACTS_CPROVER)
+    !defined(C_CONTRACTS_CPROVER) && !defined(C_CONTRACTS_STOCK)
 #define C_CONTRACTS_STOCK 1
 #endif
 #endif
@@ -74,6 +74,12 @@
 #ifndef C_CONTRACTS_STOCK
 #define C_CONTRACTS_STOCK 0
 #endif
+/* Autodetection above only fires when C_CONTRACTS_STOCK is not already set, so
+ * -DC_CONTRACTS_STOCK=0 turns the checking off on a compiler that would
+ * otherwise get it, and lands the file on the strip branch: every clause
+ * preprocesses away to the bare declaration, which is what GCC, MSVC and tcc
+ * see. That is also the only way to reach that branch from a clang, so it is
+ * how the strip target is tested. */
 
 /* Define C_CONTRACTS_CPROVER before including this header to target CBMC's own
  * front end directly, with no contract-aware compiler in the pipeline:
