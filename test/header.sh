@@ -41,7 +41,7 @@ size_t decode(unsigned char *dst, size_t cap, const unsigned char *src, size_t n
   contract_post    (contract_old(cap) > 0)
   contract_returns (contract_result <= contract_old(cap))
   contract_assigns (contract_range(dst, 0, cap));
-void nothing(int n) contract_pre ((contract_ssize_t)n > 0) contract_writes_nothing;
+void nothing(int n) contract_pre ((contract_ssize_t)n > 0) contract_writes_nothing();
 void quantified(const unsigned char *p, size_t n)
   contract_pre (contract_readable(p, n))
   contract_pre (contract_pointer_offset(p) >= 0)

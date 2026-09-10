@@ -25,4 +25,4 @@ int decode(unsigned char *dst, size_t dstCap,
 
 void sink(int *p, size_t n) contract_reads_n (p, n) contract_writes_n (p, n);
 
-void reader(int n) contract_pre ((contract_ssize_t)n > 0) contract_writes_nothing;
+void reader(int n) contract_pre ((contract_ssize_t)n > 0) contract_writes_nothing();

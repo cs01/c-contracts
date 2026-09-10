@@ -45,7 +45,7 @@
  * and c-contracts reports a copy older than the one it was built against,
  * rather than quietly finding no clauses.
  */
-#define C_CONTRACTS_VERSION 2
+#define C_CONTRACTS_VERSION 3
 
 /* Marks a declaration that exists only to be named by an annotation. Such a
  * variable is genuinely unused once the annotations vanish, so without this
@@ -126,7 +126,7 @@
       __CPROVER_requires(__CPROVER_w_ok((P), (N) * sizeof(*(P))))              \
           __CPROVER_assigns(__CPROVER_object_upto((P), (N) * sizeof(*(P))))
 
-#define contract_writes_nothing __CPROVER_assigns()
+#define contract_writes_nothing() __CPROVER_assigns()
 #define contract_returns(P) __CPROVER_ensures(P)
 
 #define contract_pre(P) __CPROVER_requires(P)
@@ -183,7 +183,7 @@
  * role and no contract_assigns makes no claim about the frame at all, so a pure reader
  * needs this to say so.
  */
-#define contract_writes_nothing assigns()
+#define contract_writes_nothing() assigns()
 
 /* The result, under a fixed name, so nothing has to be bound by hand. */
 #define contract_returns(P) post(result : P)
@@ -307,7 +307,7 @@ long __contract_pointer_offset(const void *);
  * -DC_CONTRACTS_CPROVER, so this target drops them.
  */
 #define contract_assigns(L)
-#define contract_writes_nothing
+#define contract_writes_nothing()
 #define contract_locations(A, B) A, B
 
 /* Roles, split by who can check them: the caller's obligation is a
@@ -348,7 +348,7 @@ long __contract_pointer_offset(const void *);
 #define contract_writes(P, N)
 #define contract_reads_n(P, N)
 #define contract_writes_n(P, N)
-#define contract_writes_nothing
+#define contract_writes_nothing()
 #define contract_returns(P)
 #define contract_forall(I, LO, HI, P)
 #define contract_pre(P)
