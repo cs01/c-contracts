@@ -26,10 +26,8 @@
 /* Bumped when the annotation language changes visibly. */
 #define C_CONTRACTS_VERSION 4
 
-/* Suppresses -Wunused-variable for variables that only appear in annotations.
- * Sits in declarator position -- `BYTE* const opStart contract_ghost = op;` --
- * so it has to be an attribute. MSVC has no attribute that works there and
- * __pragma is not valid mid-declarator, so MSVC gets nothing. */
+/* Suppresses -Wunused-variable for ghost variables. MSVC has no mid-declarator
+ * attribute, so it gets nothing. */
 #if defined(__GNUC__) || defined(__clang__)
 #define contract_ghost __attribute__((unused))
 #else
@@ -97,18 +95,11 @@
 #define contract_object_from(P) __CPROVER_object_from(P)
 #define contract_obeys(F, C) __CPROVER_obeys_contract((F), (C))
 
-/* ---- stock clang target ----
- * Preconditions become diagnose_if warnings at every call site.
- * Postconditions and frames ride along as annotate strings for tooling.
- * Loop contracts expand to nothing (they reach CBMC via -DC_CONTRACTS_CPROVER).
- */
+/* ---- stock clang target ---- */
 #elif C_CONTRACTS_STOCK
 
-/* Deliberately not push/pop'd. -Wgcc-compat fires where diagnose_if is
- * WRITTEN, which is in the including file, so popping at the end of this
- * header would put it back before a single annotated declaration is compiled
- * and cost the project three warnings per annotation. Including this file is
- * the request for the extension. */
+/* Not push/pop'd: -Wgcc-compat fires in the including file, so popping here
+ * would re-enable it before any annotated declaration is compiled. */
 #pragma clang diagnostic ignored "-Wgcc-compat"
 
 /* Declared for type-checking only; never defined or called. */

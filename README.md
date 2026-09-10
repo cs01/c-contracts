@@ -1,14 +1,14 @@
 # c-contracts
 
 Contracts for C in one header. Write preconditions, postconditions, and frame
-conditions on your functions. Clang type-checks them on every compile.
-[CBMC](https://www.cprover.org/cbmc/) can prove them correct for all possible
-inputs.
+conditions on your functions. The header offers progressive checks:
+* Clang type-checks them on every compile, no-op for non-clang
+* [CBMC](https://www.cprover.org/cbmc/) formally verifies the contracts for all possible inputs.
 
 ```c
 #include "c_contracts.h"
 
-int divide(int a, int b)
+unsigned divide(unsigned a, unsigned b)
   contract_pre (b != 0)
 {
   return a / b;
@@ -18,67 +18,122 @@ int divide(int a, int b)
 Clang warns at any call site where `b` might be zero:
 
 ```
-$ clang -fsyntax-only demo.c
-demo.c:8:5: warning: precondition b != 0 is violated by this call
+warning: precondition b != 0 is violated by this call
     divide(10, 0);
     ^
 ```
 
-CBMC proves no call can violate it, for every possible value of `a` and `b`:
+Other compilers silently do nothing.
+
+CBMC proves it for every possible value of `a` and `b`:
 
 ```
-$ ./prove.sh divide demo.c
-divide: VERIFICATION SUCCESSFUL
+$ ./prove.sh divide examples/demo.c -Iinclude
+VERIFICATION SUCCESSFUL
 ```
 
-That is a proof, not a test.
+See [Try it](#try-it) for a complete runnable example.
+
+## Installation
+
+Download and include in your C project:
 
 ```sh
 curl -O https://raw.githubusercontent.com/cs01/c-contracts/main/include/c_contracts.h
 ```
 
-Copy it into your tree and commit it. The header is C89 with no includes of
-its own. On GCC, MSVC, and tcc, every clause preprocesses away to the bare
-declaration. On clang, `diagnose_if` type-checks each clause at every call
-site. On CBMC, each clause becomes a proof obligation.
+The header is C89 with no includes of its own.
 
-## What each level catches
+### Dependencies
+Needs [CBMC](https://www.cprover.org/cbmc/) 6+ (`goto-cc`, `goto-instrument`, `cbmc`).
 
-Given `void sink(int n) contract_pre (n > 0);`:
+## Compiler Warnings vs. Proofs
 
-| call site | compile | prove |
+The same annotations target three compilers:
+
+| compiler | mechanism | check |
 |---|---|---|
-| `sink(0)` | warns | proves |
-| `sink(ZERO)` (enum) | warns | proves |
-| `const int n = 0; sink(n)` | warns | proves |
-| `int n = 0; sink(n)` | silent | proves |
-| `int n = 0; if (opaque()) n = 5; sink(n)` | silent | proves |
-| `sink(opaque())` | silent | proves |
+| CBMC (`-DC_CONTRACTS_CPROVER`) | `__CPROVER_requires` / `__CPROVER_r_ok` / etc. | exhaustive formal proof over all inputs |
+| stock clang | `diagnose_if` attribute | compile-time warnings at call sites where the compiler can fold constants |
+| GCC / MSVC / tcc | everything expands to nothing | zero checking, zero overhead |
 
-**Compile** folds constants and warns where clang can see a violation, with no
-extra tooling. **Prove** hands the function to CBMC, which checks every
-possible input. Only proving is a guarantee.
+Save this as `warn.c` and compile with clang to see which call sites warn:
 
-## Proving
+```c
+#include "c_contracts.h"
 
-No harness needed. The contract annotations are the spec.
+unsigned divide(unsigned a, unsigned b)
+  contract_pre (b != 0)
+{
+  return a / b;
+}
+
+enum { ZERO = 0 };
+unsigned opaque(void);
+
+void test(void) {
+  divide(1, 0);                                          /* clang warns, CBMC proves */
+  divide(1, ZERO);                                       /* clang warns, CBMC proves */
+  const unsigned b1 = 0; divide(1, b1);                  /* clang warns, CBMC proves */
+  unsigned b2 = 0; divide(1, b2);                        /* clang silent, CBMC proves */
+  unsigned b3 = 0; if (opaque()) b3 = 5; divide(1, b3); /* clang silent, CBMC proves */
+  divide(1, opaque());                                   /* clang silent, CBMC proves */
+}
+```
 
 ```
-$ ./prove.sh zero source.c -Iinclude
-lowered 4 clause(s)
+$ clang -fsyntax-only warn.c
+warn.c:13:14: warning: precondition b != 0 is violated by this call
+warn.c:14:17: warning: precondition b != 0 is violated by this call
+warn.c:15:38: warning: precondition b != 0 is violated by this call
+```
+
+Clang catches constants and folded constants at compile time; anything it cannot
+evaluate is silent. CBMC proves every case for every possible input.
+This example is also at [`examples/warn.c`](examples/warn.c).
+
+
+## Try it
+
+Using [`examples/demo.c`](examples/demo.c):
+
+```
+$ clang -fsyntax-only -Iinclude examples/demo.c
+examples/demo.c:15:15: warning: precondition b != 0 is violated by this call [-Wuser-defined-warnings]
+   15 |   divide(10, 0);
+      |               ^
+
+$ ./prove.sh divide examples/demo.c -Iinclude
+lowered 1 clause(s)
 mode: enforce (frame checked)
 ...
 VERIFICATION SUCCESSFUL
-== solved by sat in 2s
 ```
 
-`prove.sh` preprocesses the source to CBMC syntax, and CBMC generates the
-entry point from the preconditions: `contract_fresh(p, n)` becomes an
-allocation, other preconditions become assumptions, and the frame is checked
-against `contract_assigns`. `solve.sh` races every installed solver and takes
-the first clean answer, because solve time varies up to 20x between backends.
+## Generating proofs
 
-Modular verification: once you prove a dependency, use `-r` so callers
+```
+./prove.sh <function> <source.c> [-I dir ...] [-r dep ...] [-H] [-- cbmc flags]
+```
+
+`prove.sh` drives CBMC through four stages:
+
+1. **Preprocess** — compiles with `-DC_CONTRACTS_CPROVER` so contract macros
+   expand to `__CPROVER_requires`, `__CPROVER_ensures`, etc.
+2. **Compile** — `goto-cc` produces a goto program.
+3. **Instrument** — `goto-instrument` applies loop contracts and enforces the
+   named function's contract, generating the entry point from its preconditions.
+4. **Prove** — `cbmc` checks every reachable property. Multiple solvers race
+   and the first clean answer wins.
+
+A vacuity check runs after a successful proof: if the preconditions are
+unsatisfiable, the proof is vacuous and `prove.sh` exits with an error.
+
+## Modular verification
+Once a function has been verified, you can re-use that proof for functions that
+call it, rather than re-verifying the entire codebase for each function.
+
+Once you prove a dependency, use `-r` so callers
 trust its contract instead of re-analyzing its body:
 
 ```
@@ -89,40 +144,13 @@ $ ./prove.sh compress source.c -r compress_bound  # prove the caller
 This scales to large codebases. Each proof stays small regardless of the
 call tree below it.
 
-Some functions cannot be entered from their contract alone. A buffer stated
-with `contract_readable`/`contract_writable` and no `contract_fresh` says the
-memory is accessible but not which object it belongs to, so there is nothing
-to allocate. Write an entry point and pass `-H`:
+If a function's contract uses `contract_readable`/`contract_writable` without
+`contract_fresh`, there is no object for CBMC to allocate. Write your own entry
+point and pass `-H` to skip frame enforcement:
 
 ```
-$ ./prove.sh harness wildcopy.c -H -Ilib
-lowered 15 clause(s)
-mode: harness (frame not checked)
-VERIFICATION SUCCESSFUL
+$ ./prove.sh my_harness source.c -H
 ```
-
-The contracts are still checked — preconditions at the call, loop contracts on
-the loops, memory safety throughout. What is not checked is the function's own
-frame, because there is no `contract_assigns` to check it against.
-
-On success `prove.sh` also checks that the preconditions are satisfiable.
-Contradictory preconditions make every property hold vacuously, so CBMC
-reports success and the proof proves nothing:
-
-```
-$ ./prove.sh half vacuous.c -Iinclude
-lowered 2 clause(s)
-mode: enforce (frame checked)
-VERIFICATION SUCCESSFUL
-error: half's preconditions are unsatisfiable -- nothing can call it,
-       so a proof about it proves nothing
-```
-
-Exit status is 0 proved, 10 counterexample, 2 nothing to prove, 4 the
-contract could not be enforced, 5 vacuous.
-
-Needs [CBMC](https://www.cprover.org/cbmc/) 6+ (`goto-cc`,
-`goto-instrument`, `cbmc`).
 
 ## Reference
 
