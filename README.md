@@ -95,20 +95,48 @@ This example is also at [`examples/warn.c`](examples/warn.c).
 
 ## Try it
 
-Using [`examples/demo.c`](examples/demo.c):
+Where the prover earns its keep: three callers of `divide`, none of which clang
+can say anything about, because the arguments are variables rather than
+constants it can fold.
+
+```c
+/* Nothing rules out b == 0. */
+unsigned ratio_unsafe(unsigned a, unsigned b) {
+  return divide(a, b);
+}
+
+/* Discharges the obligation with a runtime check. */
+unsigned ratio_checked(unsigned a, unsigned b) {
+  if (b == 0) return 0;
+  return divide(a, b);
+}
+
+/* Passes the obligation up to its own caller. */
+unsigned ratio_safe(unsigned a, unsigned b)
+  contract_pre (b != 0)
+{
+  return divide(a, b);
+}
+```
+
+Clang is silent on all three. CBMC tells them apart:
 
 ```
 $ clang -fsyntax-only -Iinclude examples/demo.c
-examples/demo.c:15:15: warning: precondition b != 0 is violated by this call [-Wuser-defined-warnings]
-   15 |   divide(10, 0);
-      |               ^
+$ ./prove.sh ratio_unsafe examples/demo.c -Iinclude
+[divide.division-by-zero.1] line 14 division by zero in a / b: FAILURE
+VERIFICATION FAILED
 
-$ ./prove.sh divide examples/demo.c -Iinclude
-lowered 1 clause(s)
-mode: enforce (frame checked)
-...
+$ ./prove.sh ratio_checked examples/demo.c -Iinclude
+VERIFICATION SUCCESSFUL
+
+$ ./prove.sh ratio_safe examples/demo.c -Iinclude
 VERIFICATION SUCCESSFUL
 ```
+
+The full file is [`examples/demo.c`](examples/demo.c). Note that the two ways to
+satisfy a precondition are both legitimate: check it at runtime, or state it as
+your own precondition and hand the obligation to your caller.
 
 ## Generating proofs
 
