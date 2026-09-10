@@ -78,3 +78,7 @@ the CBMC emitter behind `c-contracts prove`.
 The reference implementation is a clang fork that parses all of this as real
 grammar. It is not shipped and not required; it exists as the differential
 oracle this tool is checked against.
+
+`docs/worksheets/2026-09-09-port-from-fork.md` is the working plan: what is
+done, what the two remaining ports need, the gotchas already paid for, and the
+open questions.
