@@ -44,9 +44,17 @@ installed.
 prototype scope, so a precondition gets name lookup, type checking and
 call-site folding from a compiler that has never heard of contracts.
 
-Nothing gives clang that scope for a *post*condition, so the header leaves those
-quoted in an `annotate` string, which clang lexes but never parses. That is what
-this tool reads. For each one it synthesizes a function with the same parameter
+That covers `post` too, which is why most postconditions need no tool either. A
+`post` is a result-independent fact, so it names nothing that is not already in
+scope where it is written; the header hands it to `diagnose_if` with the
+condition folded to false, so it never fires and clang type-checks it anyway.
+
+`returns` is the one that cannot work this way. Binding a name to the function's
+own return type needs a declaration, so it needs a statement expression, and a
+statement expression inside a late-parsed attribute argument crashes clang
+(22.1.8 and trunk). So the header leaves `returns`, and the frame, quoted in an
+`annotate` string, which clang lexes but never parses. That is what this tool
+reads. For each one it synthesizes a function with the same parameter
 list and a local bound to the return type via `__typeof__`, appends it to the
 translation unit, and reparses -- so the clause is checked with every typedef and
 macro it was written against still in force.
@@ -91,7 +99,8 @@ test/run.sh build/c-contracts
 ## Status
 
 Working: clause extraction, postcondition type checking, call-site precondition
-warnings (from clang itself).
+warnings (from clang itself). `post` and `pre` are both checked by a stock clang
+with no tool installed; `returns` and the frame are what the tool is for.
 
 Not yet ported from the reference implementation: the call-site dataflow pass,
 which catches a violation through a variable where constant folding cannot, and

@@ -2,7 +2,7 @@ CASE/badpost.c:8:36: postcondition of 'a': c_result <= dstCapp
 CASE/badpost.c:11:16: postcondition of 'b': c_result == 0
 CASE/badpost.c:15:19: postcondition of 'c': c_result <= n
 CASE/badpost.c:18:20: postcondition of 'd': c_result <= n
-CASE/badpost.c:21:20: postcondition of 'e': c_result <= c_old(n)
+CASE/badpost.c:21:20: postcondition of 'e': c_result <= old(n)
 CASE/badpost.c:8:36: error: use of undeclared identifier 'dstCapp'; did you mean 'dstCap'?
 CASE/badpost.c:11:16: error: use of undeclared identifier 'c_result'
 CASE/badpost.c:15:19: error: invalid operands to binary expression ('typeof (c(n))' (aka 'struct S') and 'int')

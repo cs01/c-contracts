@@ -3,7 +3,7 @@ CASE/extract.c:11:3: precondition of 'decode': (dst) != 0
 CASE/extract.c:11:3: precondition of 'decode': c_writable((dst), (dstCap))
 CASE/extract.c:12:3: precondition of 'decode': (src) != 0
 CASE/extract.c:12:3: precondition of 'decode': c_readable((src), (srcSize))
-CASE/extract.c:13:3: postcondition of 'decode': c_result <= c_old(dstCap)
+CASE/extract.c:13:3: postcondition of 'decode': c_result <= old(dstCap)
 CASE/extract.c:16:3: precondition of 'clear': (p) != 0
 CASE/extract.c:16:3: precondition of 'clear': c_writable((p), (n) * sizeof(*(p)))
 CASE/extract.c:17:3: postcondition of 'clear': p[0] == 0

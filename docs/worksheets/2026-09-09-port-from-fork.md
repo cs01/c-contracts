@@ -366,12 +366,61 @@ SUCCESSFUL once the clause is deleted.
 
 **(b) Vacuity gate in v1?** My argument for yes is in section 5.
 
-**(c) Postconditions on the declaration.** They currently live on the
-declaration as annotate markers and are checked in a ghost, which works. The
-*fork* additionally type-checks them in place. If that gap ever matters, the fix
-is a ~60-line upstream patch exposing `ParseArgsInFunctionScope` (and a result
-binding) to plugin attributes via `ParsedAttrInfo` — `ParseDecl.cpp:112`'s
-`.Default(false)` is the whole obstacle. Nice-to-have, blocks nothing.
+**(c) Postconditions on the declaration — DONE 2026-09-09, for `post`.**
+
+`post` is now checked in place by stock clang, no tool and no upstream patch
+required. A `post` is a result-independent fact, so it names nothing that is not
+already in scope where `diagnose_if` parses its argument. The header emits, next
+to the marker:
+
+```c
+__attribute__((diagnose_if(0 && (P), "postcondition " #P, "warning")))
+```
+
+`0 &&` folds the condition to false so it can never fire at a call site, and
+clang type-checks the operand regardless. `c_old(E)` is defined to `(E)` in that
+target, on the same reasoning the ghost preamble uses: in a scope whose
+parameters are the entry values, `old(x)` is `x`.
+
+`returns` cannot join it, and the reason is a **clang crash, not a design
+choice**: binding a name to the function's own return type needs a declaration,
+so it needs a statement expression, and a statement expression inside a
+late-parsed attribute argument segfaults the parser. Reproduced on Homebrew
+22.1.8 and on this tree's trunk build:
+
+```c
+void f(int n) __attribute__((diagnose_if(0 && ({ int r; r > n; }), "m", "warning")));
+```
+
+Worth reporting upstream. Until it is fixed, `returns` stays a quoted marker and
+the ghost pass is what checks it, so **the ghost pass does not go away**.
+
+`__typeof__(f(args))` *does* resolve inside `f`'s own `diagnose_if` — the
+function is in scope there — so the return type is nameable in place. Only
+binding a name to a value of it is blocked. If the crash is fixed, this becomes
+a ~5-line header change and the ghost pass becomes a fallback.
+
+**The trap this hit, worth not re-hitting.** Defining `c_old` broke the marker
+text: `post(P)` forwarded to `c_post(P)`, and passing `P` to another macro
+triggers the argument prescan, so `old(n)` reached the quoted marker as `(n)`.
+This is the `assigns` gotcha from section 6 in a second place. The fix is the
+same one: `post` and `returns` are now spelled out per target in the
+`C_CONTRACTS_NO_PREFIX` block rather than forwarding, so `#P` is the first macro
+the author's text reaches. That *improved* fidelity beyond the starting point --
+the markers now quote the clause exactly as written, where before they showed
+one prescan level of expansion (`c_old(dstCap)` for a source that said
+`old(dstCap)`). `test/cases/extract.expected` and `badpost.expected` were
+reblessed for that, and it is the only thing that changed in them.
+
+Escape hatch: `-DC_CONTRACTS_NO_INPLACE_POST`. The one shape the in-place check
+rejects that the tool accepts is a `post` naming a file-scope declaration that
+appears *later* in the translation unit.
+
+Gates: fork lit 36/36 (new `c-contracts-macro-inplace-post.c`, gate-audited by
+removing the feature and confirming it fails), tool 4/4 (new
+`test/cases/inplacepost.c`, which also pins that a bad `post` and a bad `returns`
+are each reported exactly once, from their two different checkers).
+
 
 ## 8. Not verified locally
 

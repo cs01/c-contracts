@@ -247,9 +247,40 @@ long __c_pointer_offset(const void *);
  * expand: a project macro inside the clause is re-expanded, in this same
  * translation unit, when the tool reparses it, which is the only context where
  * it means the right thing.
+ *
+ * `post` additionally gets checked here and now, with no tool in the picture.
+ * A post is a result-independent fact, so everything it can name -- the
+ * parameters, a file-scope declaration, a project macro -- is already in scope
+ * where diagnose_if parses its argument. `0 &&` folds the condition to false so
+ * it can never fire at a call site, and clang type-checks the operand anyway,
+ * which is the whole point: a typo in a postcondition becomes an error from a
+ * plain `clang -c`, the same as one in a precondition.
+ *
+ * `returns` cannot join it. Binding a name to the function's own return type
+ * needs a declaration, so it needs a statement expression, and a statement
+ * expression inside a late-parsed attribute argument crashes clang (checked on
+ * 22.1.8 and on trunk). `returns` stays marker-only and is the tool's job.
+ *
+ * Define C_CONTRACTS_NO_INPLACE_POST to drop the in-place check. The one shape
+ * it rejects that the tool accepts is a post naming a file-scope declaration
+ * that appears LATER in the translation unit: the tool reparses with the whole
+ * unit in scope, this sees only what precedes the annotated declaration.
  */
+#ifdef C_CONTRACTS_NO_INPLACE_POST
 #define c_post(P) __attribute__((annotate("c_post:" #P)))
+#else
+#define c_post(P)                                                              \
+  __attribute__((annotate("c_post:" #P)))                                      \
+  __attribute__((diagnose_if(0 && (P), "postcondition " #P, "warning")))
+#endif
 #define c_returns(P) __attribute__((annotate("c_returns:" #P)))
+
+/* In a scope whose parameters ARE the entry values, old(E) is E. That is what
+ * makes the in-place check above possible at all, and it is the same identity
+ * the tool's ghost preamble relies on. The quoted marker is unaffected: #P does
+ * not expand, so the tool still sees `old(...)` and rebinds it itself.
+ */
+#define c_old(E) (E)
 
 /* Frames are not expressions and do not survive quoting: `locations(a, b)` and
  * `range(p, lo, hi)` are macros whose expansion depends on the target, and a
@@ -359,7 +390,26 @@ void __contract_violation(const char *predicate, const char *file,
  */
 #if !C_CONTRACTS
 #define pre(P) c_pre(P)
-#define post(P) c_post(P)
+/* Not `c_post(P)`, and for the same reason `assigns` is spelled out below. A
+ * postcondition's marker quotes the clause as the author wrote it, and `#P`
+ * only sees raw text when the stringizing macro is the first one that text
+ * reaches. Forwarding would expand the predicates during the argument prescan,
+ * so `post (n == old(n))` would reach the marker as `n == (n)` and a reader
+ * could no longer find the clause in their own file.
+ */
+#ifdef C_CONTRACTS_CPROVER
+#define post(P) __CPROVER_ensures(P)
+#elif C_CONTRACTS_STOCK
+#ifdef C_CONTRACTS_NO_INPLACE_POST
+#define post(P) __attribute__((annotate("c_post:" #P)))
+#else
+#define post(P)                                                               \
+  __attribute__((annotate("c_post:" #P)))                                     \
+  __attribute__((diagnose_if(0 && (P), "postcondition " #P, "warning")))
+#endif
+#else
+#define post(P)
+#endif
 /* Not `c_assigns(L)`. A frame is written `assigns(locations(a, b))`, and
  * forwarding would expand `locations` during the argument prescan, handing the
  * next macro three arguments where it declared one. `assigns` has to be the
@@ -375,9 +425,23 @@ void __contract_violation(const char *predicate, const char *file,
 #define old(E) c_old(E)
 #endif
 
+/* `returns` stringizes too, so it is spelled out for the same reason `post` is.
+ * Under a contract-aware front end there is nothing to quote and forwarding is
+ * right: `post` is grammar there, and the predicates inside P are keywords that
+ * no prescan can touch.
+ */
+#if C_CONTRACTS
+#define returns(P) c_returns(P)
+#elif defined(C_CONTRACTS_CPROVER)
+#define returns(P) __CPROVER_ensures(P)
+#elif C_CONTRACTS_STOCK
+#define returns(P) __attribute__((annotate("c_returns:" #P)))
+#else
+#define returns(P)
+#endif
+
 /* The rest are macros under every target, so they alias unconditionally. */
 #define locations(A, B) A, B
-#define returns(P) c_returns(P)
 #define reads(P, N) c_reads(P, N)
 #define writes(P, N) c_writes(P, N)
 #define reads_n(P, N) c_reads_n(P, N)
