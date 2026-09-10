@@ -9,8 +9,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "CProver.h"
 #include "CallSite.h"
 #include "Contract.h"
+#include "Prove.h"
 
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
@@ -23,6 +25,7 @@
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
@@ -40,6 +43,87 @@ llvm::cl::opt<bool> WarningsAsErrors(
     "warnings-as-errors",
     llvm::cl::desc("Exit non-zero if any contract problem is reported"),
     llvm::cl::cat(Category));
+
+//===----------------------------------------------------------------------===//
+// prove
+//===----------------------------------------------------------------------===//
+
+llvm::cl::opt<std::string>
+    Caller("caller",
+           llvm::cl::desc("Verify this caller against the proved function's "
+                          "contract, where a precondition is an obligation"),
+           llvm::cl::cat(Category));
+
+llvm::cl::opt<std::string>
+    Mode("mode", llvm::cl::desc("auto (default), enforce, or harness"),
+         llvm::cl::init("auto"), llvm::cl::cat(Category));
+
+llvm::cl::opt<bool>
+    NoVacuity("no-vacuity",
+              llvm::cl::desc("Skip the check that the preconditions are "
+                             "satisfiable at all"),
+              llvm::cl::cat(Category));
+
+llvm::cl::opt<bool> Verbose("verbose",
+                            llvm::cl::desc("Print what CBMC printed"),
+                            llvm::cl::cat(Category));
+
+llvm::cl::opt<unsigned> Timeout("timeout",
+                                llvm::cl::desc("Seconds any one step may take"),
+                                llvm::cl::init(900), llvm::cl::cat(Category));
+
+llvm::cl::opt<std::string>
+    Solver("solver",
+           llvm::cl::desc("sat, or an installed SMT solver; default is chosen "
+                          "from the shape of the harness"),
+           llvm::cl::cat(Category));
+
+llvm::cl::opt<std::string>
+    ProofDir("proof-dir",
+             llvm::cl::desc("Where <function>.proof.c may override the "
+                            "generated entry point"),
+             llvm::cl::init("proofs"), llvm::cl::cat(Category));
+
+llvm::cl::opt<std::string>
+    PreprocessorCC("cc",
+                   llvm::cl::desc("The preprocessor that lowers the clauses"),
+                   llvm::cl::init("cc"), llvm::cl::cat(Category));
+
+llvm::cl::list<std::string>
+    Bounds("bound",
+           llvm::cl::desc("name=N, for a size the contract leaves "
+                          "open"),
+           llvm::cl::cat(Category));
+
+llvm::cl::opt<unsigned>
+    Unwind("unwind",
+           llvm::cl::desc("CBMC's unwind bound, with unwinding assertions on"),
+           llvm::cl::cat(Category));
+
+llvm::cl::list<std::string> CBMCFlags("cbmc-flag",
+                                      llvm::cl::desc("Passed through to cbmc"),
+                                      llvm::cl::cat(Category));
+
+llvm::cl::opt<bool> KeepWork("keep-work",
+                             llvm::cl::desc("Keep the working directory"),
+                             llvm::cl::cat(Category));
+
+/// Set from argv before the option parser runs; empty unless the `prove`
+/// subcommand was asked for.
+std::string ProveFunction;
+
+/// What prove exited with, since it runs inside the AST consumer.
+int ProveStatus = 0;
+
+/// Clang's own headers, from the LLVM this was built against. Every parse the
+/// tool performs needs them, and it cannot derive them from argv[0] the way the
+/// driver does, because it does not live in an LLVM install.
+std::string resourceDirArg(const std::vector<std::string> &Existing) {
+  for (const std::string &A : Existing)
+    if (llvm::StringRef(A).starts_with("-resource-dir"))
+      return {};
+  return std::string("-resource-dir=") + C_CONTRACTS_RESOURCE_DIR;
+}
 
 /// Set by whatever reports a problem; read by main for the exit status.
 bool SawError = false;
@@ -129,6 +213,11 @@ public:
 
     const SourceManager &SM = Ctx.getSourceManager();
 
+    if (!ProveFunction.empty()) {
+      ProveStatus = prove(Contracts, Ctx);
+      return;
+    }
+
     if (ListClauses)
       for (const Contract &C : Contracts)
         for (const Clause &Cl : C.Clauses)
@@ -154,6 +243,45 @@ public:
   }
 
 private:
+  /// Level 3. The contract is already type-checked by the time this runs; what
+  /// is left is whether it is true for every input, which is CBMC's job.
+  int prove(const std::vector<Contract> &Contracts, ASTContext &Ctx) {
+    ProveOptions Opts;
+    Opts.Function = ProveFunction;
+    Opts.Caller = Caller;
+    Opts.Mode = Mode;
+    Opts.Vacuity = !NoVacuity;
+    Opts.Verbose = Verbose;
+    Opts.Timeout = Timeout;
+    Opts.Solver = Solver;
+    Opts.ProofDir = ProofDir;
+    Opts.CC = PreprocessorCC;
+    Opts.KeepWork = KeepWork;
+    Opts.Unwind = Unwind;
+    for (const std::string &F : CBMCFlags)
+      Opts.CBMCFlags.push_back(F);
+    for (const std::string &B : Bounds) {
+      auto [Name, Value] = llvm::StringRef(B).split('=');
+      if (Value.empty()) {
+        llvm::errs() << "error: --bound wants name=N, not '" << B << "'\n";
+        return 2;
+      }
+      Opts.Bounds[Name] = Value.str();
+    }
+
+    Contract Wanted;
+    for (const Contract &C : Contracts)
+      if (C.Fn->getName() == ProveFunction)
+        Wanted = C;
+
+    const SourceManager &SM = Ctx.getSourceManager();
+    llvm::StringRef File;
+    if (auto Main = SM.getFileEntryRefForID(SM.getMainFileID()))
+      File = Main->getName();
+    return runProve(Wanted, File, Args, Opts,
+                    Ctx.getDiagnostics().hasErrorOccurred());
+  }
+
   std::vector<std::string> Args;
 };
 
@@ -212,6 +340,8 @@ private:
         continue;
       Out.push_back(Line[I]);
     }
+    if (std::string R = resourceDirArg(Out); !R.empty())
+      Out.push_back(std::move(R));
     return Out;
   }
 
@@ -221,7 +351,40 @@ private:
 
 } // namespace
 
+/// Prints every contract clause a file carries in CBMC's spelling, canonically.
+///
+/// This is what both halves of the differential gate go through, so the gate
+/// cannot be passed by comparing two texts with two different canonicalisers.
+int printClauses(int argc, const char **argv) {
+  for (int I = 2; I < argc; ++I) {
+    auto Buf = llvm::MemoryBuffer::getFile(argv[I]);
+    if (!Buf) {
+      llvm::errs() << "error: cannot read " << argv[I] << "\n";
+      return 2;
+    }
+    for (const std::string &C :
+         extractClauses((*Buf)->getBuffer(), /*Canonical=*/true))
+      llvm::outs() << C << "\n";
+  }
+  return 0;
+}
+
 int main(int argc, const char **argv) {
+  // Two subcommands sit in front of the option parser, because both take a
+  // positional argument that is not a source file and llvm::cl has nowhere to
+  // put one.
+  std::vector<const char *> Argv(argv, argv + argc);
+  if (argc > 1 && llvm::StringRef(argv[1]) == "clauses")
+    return printClauses(argc, argv);
+  if (argc > 2 && llvm::StringRef(argv[1]) == "prove") {
+    ProveFunction = argv[2];
+    Argv.erase(Argv.begin() + 1, Argv.begin() + 3);
+  } else if (argc > 1 && llvm::StringRef(argv[1]) == "check") {
+    Argv.erase(Argv.begin() + 1);
+  }
+  argc = static_cast<int>(Argv.size());
+  argv = Argv.data();
+
   auto Parser = tooling::CommonOptionsParser::create(argc, argv, Category);
   if (!Parser) {
     llvm::errs() << toString(Parser.takeError());
@@ -233,9 +396,14 @@ int main(int argc, const char **argv) {
 
   IgnoringDiagConsumer Ignore;
   Tool.setDiagnosticConsumer(&Ignore);
+  Tool.appendArgumentsAdjuster(tooling::getInsertArgumentAdjuster(
+      resourceDirArg({}).c_str(), tooling::ArgumentInsertPosition::BEGIN));
   CheckActionFactory Factory(Parser->getCompilations());
   if (Tool.run(&Factory) != 0)
     return 2;
+
+  if (!ProveFunction.empty())
+    return ProveStatus;
 
   if (SawError)
     return 1;

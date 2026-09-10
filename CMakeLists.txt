@@ -25,6 +25,14 @@ target_include_directories(c-contracts SYSTEM PRIVATE
   ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
 target_compile_definitions(c-contracts PRIVATE ${LLVM_DEFINITIONS})
 
+# Where clang's own stddef.h, stdint.h and friends live in the LLVM this was
+# built against. The tool is not installed inside an LLVM tree, so it cannot
+# find them the way the clang driver does -- from its own argv[0] -- and
+# without them a source that includes <stddef.h> parses with size_t unknown and
+# every clause naming it collapses to a recovery expression.
+target_compile_definitions(c-contracts PRIVATE
+  C_CONTRACTS_RESOURCE_DIR="${LLVM_LIBRARY_DIR}/clang/${LLVM_VERSION_MAJOR}")
+
 # clang-cpp and LLVM are the single shared libraries every LLVM install ships;
 # linking the fine-grained static libs instead would tie the build to how a
 # particular distribution chose to slice them.
@@ -37,3 +45,4 @@ endif()
 enable_testing()
 add_test(NAME suite
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run.sh $<TARGET_FILE:c-contracts>)
+
