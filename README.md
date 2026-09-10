@@ -95,27 +95,27 @@ This example is also at [`examples/warn.c`](examples/warn.c).
 
 ## Try it
 
-Where the prover earns its keep: three callers of `divide`, none of which clang
-can say anything about, because the arguments are variables rather than
-constants it can fold.
+Where the prover earns its keep. The divisor here is `hi - lo`, zero when the
+range is empty — not something clang can fold, so it says nothing about any of
+these.
 
 ```c
-/* Nothing rules out b == 0. */
-unsigned ratio_unsafe(unsigned a, unsigned b) {
-  return divide(a, b);
+/* Nothing rules out an empty range. */
+unsigned scale(unsigned x, unsigned lo, unsigned hi) {
+  return divide((x - lo) * 100, hi - lo);
 }
 
-/* Discharges the obligation with a runtime check. */
-unsigned ratio_checked(unsigned a, unsigned b) {
-  if (b == 0) return 0;
-  return divide(a, b);
+/* Rules it out at runtime. */
+unsigned scale_checked(unsigned x, unsigned lo, unsigned hi) {
+  if (hi <= lo) return 0;
+  return divide((x - lo) * 100, hi - lo);
 }
 
-/* Passes the obligation up to its own caller. */
-unsigned ratio_safe(unsigned a, unsigned b)
-  contract_pre (b != 0)
+/* Rules it out in the contract. */
+unsigned scale_ranged(unsigned x, unsigned lo, unsigned hi)
+  contract_pre (hi > lo)
 {
-  return divide(a, b);
+  return divide((x - lo) * 100, hi - lo);
 }
 ```
 
@@ -123,20 +123,22 @@ Clang is silent on all three. CBMC tells them apart:
 
 ```
 $ clang -fsyntax-only -Iinclude examples/demo.c
-$ ./prove.sh ratio_unsafe examples/demo.c -Iinclude
-[divide.division-by-zero.1] line 14 division by zero in a / b: FAILURE
+$ ./prove.sh scale examples/demo.c -Iinclude
+[divide.division-by-zero.1] line 16 division by zero in a / b: FAILURE
 VERIFICATION FAILED
 
-$ ./prove.sh ratio_checked examples/demo.c -Iinclude
+$ ./prove.sh scale_checked examples/demo.c -Iinclude
 VERIFICATION SUCCESSFUL
 
-$ ./prove.sh ratio_safe examples/demo.c -Iinclude
+$ ./prove.sh scale_ranged examples/demo.c -Iinclude
 VERIFICATION SUCCESSFUL
 ```
 
-The full file is [`examples/demo.c`](examples/demo.c). Note that the two ways to
-satisfy a precondition are both legitimate: check it at runtime, or state it as
-your own precondition and hand the obligation to your caller.
+The full file is [`examples/demo.c`](examples/demo.c). Both fixes are
+legitimate: check the condition at runtime, or state it as your own
+precondition and hand the obligation to your caller. For the last one CBMC has
+to prove that `hi > lo` implies `hi - lo != 0` — a fact about the caller's
+argument becoming a fact about the callee's.
 
 ## Generating proofs
 
