@@ -30,21 +30,9 @@ curl -O https://raw.githubusercontent.com/cs01/c-contracts/main/include/c_contra
 ```
 
 Copy it into your tree and commit it. The header is C89 with no includes of
-its own. On compilers without `diagnose_if` (GCC, MSVC, tcc), every clause
-preprocesses away to the bare declaration.
-
-## Why a wrapper
-
-CBMC has its own contract syntax (`__CPROVER_requires`, etc.), but it breaks
-every compiler that is not CBMC. Projects work around this with private macro
-layers (AWS s2n has one, aws-c-common has a different one). This is that layer
-as one vendorable file.
-
-The problem with those wrappers: they expand to **nothing** outside CBMC. The
-spec becomes unparsed text between proof runs. A renamed field, a stale bound,
-a typo, all invisible until someone runs CBMC, which most projects rarely do.
-Here the fallback is `diagnose_if`, so an ordinary compile type-checks every
-clause in the function's own scope.
+its own. On GCC, MSVC, and tcc, every clause preprocesses away to the bare
+declaration. On clang, `diagnose_if` type-checks each clause at every call
+site. On CBMC, each clause becomes a proof obligation.
 
 ## What each level catches
 
@@ -65,40 +53,25 @@ possible input. Only proving is a guarantee.
 
 ## Proving
 
-Write a harness that calls the function with nondeterministic inputs:
-
-```c
-// harness.c — includes the source, calls the function with nondeterministic inputs
-void harness(void)
-{
-  size_t n;
-  __CPROVER_assume(n > 0 && n < 64);
-  unsigned char *p = __CPROVER_allocate(n, 0);
-  zero(p, n);
-}
-```
-
-Then prove it:
+No harness needed. The contract annotations are the spec.
 
 ```
-$ ./prove.sh zero harness.c -Iinclude
-lowered 4 contract clause(s)
+$ ./prove.sh zero source.c -Iinclude
+lowered 4 clause(s)
 mode: enforce (frame checked)
 ...
 VERIFICATION SUCCESSFUL
 == solved by sat in 2s
 ```
 
-Needs [CBMC](https://www.cprover.org/cbmc/) 6+ (`goto-cc`, `goto-instrument`,
-`cbmc`). `prove.sh` preprocesses with `-DC_CONTRACTS_CPROVER` to lower the
-macros to CBMC's syntax, compiles to a goto program, applies loop contracts,
-enforces the function's frame, and runs `cbmc`. `solve.sh` races every
-installed solver (MiniSat, z3, bitwuzla, cvc5) and takes the first clean
-answer, because solve time varies up to 20x between backends.
+`prove.sh` preprocesses the source to CBMC syntax, and CBMC generates the
+entry point from the preconditions: `contract_fresh(p, n)` becomes an
+allocation, other preconditions become assumptions, and the frame is checked
+against `contract_assigns`. `solve.sh` races every installed solver and takes
+the first clean answer, because solve time varies up to 20x between backends.
 
-One caveat: CBMC lets a loop's `contract_assigns` widen the function's frame
-inside that loop, and does not check that the loop's targets lie within the
-function's.
+Needs [CBMC](https://www.cprover.org/cbmc/) 6+ (`goto-cc`,
+`goto-instrument`, `cbmc`).
 
 ## Reference
 
@@ -107,13 +80,13 @@ function's.
 A clause goes after the parameter list, before the `;` or `{`. They stack.
 Everything else below is shorthand for clauses or vocabulary you use inside one.
 
-| clause | means | checked by |
-|---|---|---|
-| `contract_pre (P)` | caller must establish `P` | compile, prove |
-| `contract_post (P)` | `P` holds on return | compile |
-| `contract_returns (P)` | `P` holds on return, may name `contract_result` | prove |
-| `contract_assigns (L)` | nothing outside `L` changes | prove |
-| `contract_writes_nothing()` | the frame is empty | prove |
+| clause | means |
+|---|---|
+| `contract_pre (P)` | caller must establish `P` |
+| `contract_post (P)` | `P` holds on return |
+| `contract_returns (P)` | `P` holds on return, may name `contract_result` |
+| `contract_assigns (L)` | nothing outside `L` changes |
+| `contract_writes_nothing()` | the frame is empty |
 
 ### Predicates
 
@@ -151,8 +124,7 @@ Memory a function is allowed to write. These go inside `contract_assigns (...)`.
 | `contract_locations (a, b)` | two locations at once; nest for three or more |
 
 A bare lvalue is also a location, so `contract_assigns (i)` says the function
-may write `i` and nothing else. Nesting is how you combine more than two,
-because the header uses no variadic macros and so stays valid C89:
+may write `i` and nothing else.
 
 ```c
 contract_assigns (contract_locations(op, contract_locations(ip,
@@ -174,7 +146,7 @@ while (i < n)
 ```
 
 `contract_ghost` marks a variable that exists only for an annotation, so it
-does not trigger `-Wunused-variable` where the clauses vanish:
+does not trigger `-Wunused-variable` where the clauses are not checked:
 
 ```c
 BYTE* const opStart contract_ghost = op;
@@ -196,35 +168,16 @@ hand.
 | `contract_reads_n (p, n)` | as `contract_reads`, over `n * sizeof(*p)` bytes |
 | `contract_writes_n (p, n)` | as `contract_writes`, over `n * sizeof(*p)` bytes |
 
-Two roles, not three. A function that reads then writes carries both.
-`contract_reads` is what says the caller must have initialized the memory.
+A function that reads then writes carries both roles.
 
 ## Gotchas
 
-- **Write `0`, not `NULL`.** `contract_pre (p != NULL)` does not compile.
-  `NULL` is `((void *)0)` and a cast to a pointer is not a constant expression
-  in C, so the attribute is rejected. `contract_pre (p != 0)` works.
-- **One spelling, always prefixed.** A vendored header should not take words as
-  common as `pre`, `range` or `result` out of a project's namespace.
+- **Write `0`, not `NULL`.** `contract_pre (p != NULL)` does not compile on
+  clang. `NULL` is `((void *)0)` and a cast to a pointer is not a constant
+  expression in C. `contract_pre (p != 0)` works.
 - **`contract_writes` says nothing about aliasing.** Two roles on one call may
   name the same buffer. Say `contract_pre (contract_disjoint(a, b))` or
-  `contract_pre (contract_fresh(p, n))` if you mean it. Without it,
-  `contract_writes` alone will not discharge a proof of even the simplest
-  buffer-writing function.
-
-## Targets
-
-The header picks one at include time.
-
-| target | when | `contract_pre` | frame, loops |
-|---|---|---|---|
-| stock clang | `__has_attribute(diagnose_if)` | call-site warning | dropped |
-| CBMC | `-DC_CONTRACTS_CPROVER` | `__CPROVER_requires` | `__CPROVER_assigns` etc. |
-| contract-aware front end | `__has_feature(c_contracts)` | grammar | grammar |
-| anything else | otherwise | nothing | nothing |
-
-`-DC_CONTRACTS_STOCK=0` forces the last row, for a build that wants the
-annotations present and inert.
+  `contract_pre (contract_fresh(p, n))` if you mean it.
 
 ## Tests
 
@@ -232,9 +185,3 @@ annotations present and inert.
 |---|---|
 | `test/header.sh` | a C compiler |
 | `test/readme.sh` | a C compiler. Compiles this file's examples |
-
-## Status
-
-The header is the project. `prove.sh` and `solve.sh` are the proving workflow.
-No build step, no compiled binary, no LLVM dependency. Copy the header, write a
-harness, run the script.
