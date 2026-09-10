@@ -1,8 +1,8 @@
 # c-contracts
 
-c-contracts is a contract language for C, in one header you copy into your
-project. Clauses go on the declaration, where your own compiler type-checks
-them, and CBMC proves them for every input.
+Contracts for C in one header you copy into your project. Clauses go on the
+declaration, your compiler type-checks them, and CBMC proves them for every
+input.
 
 ```c
 #include <stddef.h>
@@ -32,9 +32,9 @@ zero: VERIFICATION SUCCESSFUL
 ```
 
 That is a proof, not a test: it holds for every `p` and every `n` the
-preconditions allow. CBMC does the proving. What this adds is that the same file
-is still ordinary C. GCC, MSVC and tcc preprocess every clause away to the bare
-declaration; a clang with `diagnose_if` goes further and type-checks them.
+preconditions allow. CBMC does the proving. What this project adds is that the
+same file is still ordinary C. GCC, MSVC and tcc preprocess every clause away to
+the bare declaration; clang goes further and type-checks them via `diagnose_if`.
 
 ```sh
 curl -O https://raw.githubusercontent.com/cs01/c-contracts/main/include/c_contracts.h
@@ -54,27 +54,27 @@ than silently finding fewer clauses.
 
 Against zstd's decoder this proves `ZSTD_wildcopy` memory-safe for every length
 in two seconds, and found undefined behaviour on the first run: `(BYTE*)dst -
-(const BYTE*)src` computed before the branch that is the only case where the two
-pointers are in one object.
+(const BYTE*)src` computed before the branch that guards the only case where
+both pointers are in the same object.
 
 ## Why not write `__CPROVER_requires` directly
 
-Because it breaks every build that is not CBMC, so projects wrap it in a private
-macro layer: AWS s2n has one, aws-c-common has a different one, and CBMC's own
-docs note that repositories "may use their own names for some of them". This is
-that layer as one vendorable file.
+Because it breaks every build that is not CBMC. Projects work around this with
+private macro layers (AWS s2n has one, aws-c-common has a different one), and
+CBMC's own docs note that repositories "may use their own names for some of
+them." This is that layer as one vendorable file.
 
-Their wrapper expands to **nothing** outside a CBMC build, which means the spec
-is unparsed text between proof runs. A renamed field, a stale bound, a typo: all
-invisible until someone runs CBMC, which for most projects is rarely. Here the
-`#else` branch is `diagnose_if`, so an ordinary compile type-checks every clause
-in the function's own scope.
+The problem with those wrappers is that they expand to **nothing** outside a CBMC
+build. The spec becomes unparsed text between proof runs. A renamed field, a
+stale bound, a typo: all invisible until someone runs CBMC, which for most
+projects is rarely. Here the `#else` branch is `diagnose_if`, so an ordinary
+compile type-checks every clause in the function's own scope.
 
-That is what tier 1 is for. It is spec hygiene, not bug finding.
+That is what tier 1 is for. Spec hygiene, not bug finding.
 
 ## How far each tier actually sees
 
-Measured, on `void sink(int n) contract_pre (n > 0);` with `enum { ZERO = 0 };`
+Measured on `void sink(int n) contract_pre (n > 0);` with `enum { ZERO = 0 };`
 and `opaque()` an extern function.
 
 | call site | `clang -c` | `+ check` | `+ prove` |
@@ -109,11 +109,11 @@ bound to a name and so cannot ride on `diagnose_if`.
 $ c-contracts prove <function> <file> -- <your compile flags>
 ```
 
-Needs CBMC 6+. Nothing in the pipeline understands contracts: preprocessing the
-same source with `-DC_CONTRACTS_CPROVER` is the whole lowering, and the rest is
-`goto-cc`, `goto-instrument` and `cbmc`.
+Needs CBMC 6+. Nothing here understands contracts: preprocessing the same source
+with `-DC_CONTRACTS_CPROVER` is the whole lowering, and the rest is `goto-cc`,
+`goto-instrument` and `cbmc`.
 
-The entry point is generated from the preconditions, so there is no separate
+The entry point is generated from the preconditions, so you don't need a separate
 harness full of hand-written `__CPROVER_assume` that nothing keeps in step with
 the function. `contract_fresh(p, n)` allocates; every other conjunct is assumed;
 a parameter no clause mentions stays nondeterministic.
@@ -137,11 +137,11 @@ to be said by hand.
 
 Three things it does that a shell script around CBMC does not:
 
-- `contract_writes (p, n)` with no `contract_fresh (p, n)` beside it is reported
-  before a solver runs, naming the pointer and the size for the missing clause.
-  Without it CBMC reports ten failures that are not defects.
+- `contract_writes (p, n)` with no `contract_fresh (p, n)` beside it gets
+  reported before a solver runs, naming the pointer and the size. Without this
+  CBMC reports ten failures that are not defects.
 - The preconditions are checked for satisfiability by running the same
-  assumptions and asserting false. A clean run there means nothing can call the
+  assumptions and asserting false. A clean run means nothing can call the
   function and the proof proved nothing.
 - The solvers race. CBMC 6.11 with `--z3` aborts on some loop-contract binaries,
   and solve time varies up to 20x between backends in either direction.
@@ -152,20 +152,11 @@ targets lie within the function's.
 
 ## Reference
 
-Five kinds of thing, and they are not interchangeable:
-
-- a **clause** is a specification, and goes on a function or a loop;
-- a **role** is one word that expands to several clauses;
-- a **predicate** is true or false, and goes *inside* a clause;
-- a **value** is something you can name inside a clause, like `contract_old(n)`;
-- a **frame location** is memory a function may write, and goes inside
-  `contract_assigns` only.
-
 ### Clauses
 
-**A clause is the specification itself.** It goes after the parameter list,
-before the `;` or the `{`, and they stack. Everything else in this reference is
-either shorthand for clauses or vocabulary used inside one.
+A clause is the specification. It goes after the parameter list, before the `;`
+or `{`, and they stack. Everything else below is either shorthand for clauses or
+vocabulary you use inside one.
 
 | clause | means | checked by |
 |---|---|---|
@@ -177,11 +168,10 @@ either shorthand for clauses or vocabulary used inside one.
 
 ### Roles
 
-**A role is one word that expands to several clauses.** Sugar: anything a role
-says you can write out by hand.
+A role is one word that expands to several clauses. Anything a role says, you can
+write out by hand.
 
-Whether they help depends entirely on what you are annotating. Measured over
-zstd:
+Whether they help depends on what you are annotating. Over zstd:
 
 | function | roles | primitives |
 |---|---|---|
@@ -192,11 +182,9 @@ zstd:
 | `ZSTD_overlapCopy8` | 1 | 5 |
 | `ZSTD_wildcopy`, `ZSTD_safecopy`, `ZSTD_execSequence` | 0 | 23 |
 
-At an **API boundary**, where a parameter is a `(buffer, capacity)` pair, a role
-usually says the whole thing. In **hot-path internals**, where the pointers are
-interior, the sizes carry over-copy slack and the interesting requirements are
-aliasing and offsets, roles cover the least interesting clause and you write the
-rest by hand.
+API boundaries where a parameter is a `(buffer, capacity)` pair: a role usually
+says the whole thing. Hot-path internals with interior pointers and over-copy
+slack: roles cover the boring part and you write the rest by hand.
 
 **Watch the units.** `contract_reads`/`contract_writes` count **bytes**, like
 `memcpy`. The `_n` forms count **elements** of a typed pointer.
@@ -209,13 +197,13 @@ rest by hand.
 | `contract_reads_n (p, n)` | as `contract_reads`, over `n * sizeof(*p)` bytes |
 | `contract_writes_n (p, n)` | as `contract_writes`, over `n * sizeof(*p)` bytes |
 
-Two roles, not three. A function that reads then writes carries both. `contract_reads` is
-what says the caller must have initialized the memory.
+Two roles, not three. A function that reads then writes carries both.
+`contract_reads` is what says the caller must have initialized the memory.
 
 ### Predicates
 
-**A predicate is true or false, and goes inside a clause.** It is the vocabulary
-for talking about memory, which C has no way to say.
+A predicate is true or false and goes inside a clause. It is the vocabulary for
+talking about memory, which C has no way to say.
 `contract_pre (contract_fresh(p, n))` is a clause containing a predicate;
 `contract_fresh(p, n)` on its own specifies nothing.
 
@@ -230,8 +218,8 @@ for talking about memory, which C has no way to say.
 
 ### Values
 
-**Things you can name inside a clause but that are not true or false.** They
-appear in ordinary C expressions, next to your own variables.
+Things you can name inside a clause but that are not true or false. They appear
+in ordinary C expressions, next to your own variables.
 
 | value | is |
 |---|---|
@@ -242,13 +230,13 @@ appear in ordinary C expressions, next to your own variables.
 
 ### Frame locations
 
-**Memory a function is allowed to write.** These go inside
+Memory a function is allowed to write. These go inside
 `contract_assigns (...)` and nowhere else.
 
 | location | is |
 |---|---|
 | `contract_range (p, lo, hi)` | elements `[lo, hi)` of `p`, half open |
-| `contract_locations (a, b)` | two locations at once; nest it for three or more |
+| `contract_locations (a, b)` | two locations at once; nest for three or more |
 
 A bare lvalue is also a location, so `contract_assigns (i)` says the function
 may write `i` and nothing else. Nesting is how you get past two, because the
@@ -261,9 +249,9 @@ contract_assigns (contract_locations(op, contract_locations(ip,
 
 ### Loop clauses
 
-**Clauses that go on a loop instead of on a function**, between the loop header
-and the body. With them CBMC proves the loop by induction rather than unwinding
-it, which is what makes a proof hold for every input rather than up to a bound.
+Clauses that go on a loop instead of a function, between the loop header and the
+body. With them CBMC proves the loop by induction rather than unwinding it, which
+is what makes a proof hold for every input rather than up to a bound.
 
 ```c
 while (i < n)
@@ -273,8 +261,8 @@ while (i < n)
 { p[i] = 0; i++; }
 ```
 
-`contract_ghost` marks a variable that exists only for an annotation, so it does not
-become `-Wunused-variable` where the clauses vanish:
+`contract_ghost` marks a variable that exists only for an annotation, so it does
+not become `-Wunused-variable` where the clauses vanish:
 
 ```c
 BYTE* const opStart contract_ghost = op;
@@ -282,17 +270,16 @@ BYTE* const opStart contract_ghost = op;
 
 ## Things that will bite you
 
-- **Write `0`, not `NULL`.** `contract_pre (p != NULL)` does not compile. `NULL` is
-  `((void *)0)` and a cast to a pointer is not a constant expression in C, so
-  the attribute is rejected. `contract_pre (p != 0)` and `contract_pre (!p)` are fine.
-- **One spelling, always prefixed.** A vendored header may not take words as
-  common as `pre`, `range` or `result` out of a project's namespace, and an
-  opt-in second spelling only moves that decision to whoever includes the file
-  first.
-- **`contract_writes` says nothing about aliasing.** Two roles on one call may name the
-  same buffer. Say `contract_pre (contract_disjoint(a, b))` or `contract_pre (contract_fresh(p, n))` if you mean it.
-  It is not decorative: `contract_writes` alone will not discharge a proof of even the
-  simplest buffer-writing function.
+- **Write `0`, not `NULL`.** `contract_pre (p != NULL)` does not compile. `NULL`
+  is `((void *)0)` and a cast to a pointer is not a constant expression in C, so
+  the attribute is rejected. `contract_pre (p != 0)` works fine.
+- **One spelling, always prefixed.** A vendored header should not take words as
+  common as `pre`, `range` or `result` out of a project's namespace.
+- **`contract_writes` says nothing about aliasing.** Two roles on one call may
+  name the same buffer. Say `contract_pre (contract_disjoint(a, b))` or
+  `contract_pre (contract_fresh(p, n))` if you mean it. Without it,
+  `contract_writes` alone will not discharge a proof of even the simplest
+  buffer-writing function.
 
 ## Targets
 
