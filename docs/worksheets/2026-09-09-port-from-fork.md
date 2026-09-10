@@ -814,8 +814,8 @@ inside. Always run the `assert(0)` probe before believing a SUCCESSFUL.
 
 ### Open, in the order worth doing
 
-1. **`contract_writes_nothing` is object-like** where every other clause is
-   function-like. The last inconsistency in the surface. `contract_writes_nothing()`.
+1. ~~`contract_writes_nothing` is object-like.~~ **Done 2026-09-10**, header
+   version 3: it takes empty parens like every other clause.
 2. **`prove` has no project mode.** One function per invocation, no caching, no
    report. The empirical study on unit proofs (arXiv 2503.13762, 73 proofs over
    four embedded OSes) measures 87 minutes to write a proof and 61 minutes to
@@ -833,6 +833,16 @@ inside. Always run the `assert(0)` probe before believing a SUCCESSFUL.
    thing worth taking from the fork's checking half.
 7. **A loop `assigns` silently widens the function frame** (section 5). Nobody
    checks containment.
+
+### The reference section was one table too few
+
+Splitting it was not cosmetic. Writing down "a predicate is true or false and
+goes inside a clause" made it obvious that half the predicate table were not
+predicates: `contract_result` is a value, `contract_ssize_t` a type, and
+`contract_range` / `contract_locations` are frame locations that are only valid
+inside `contract_assigns`. They are now three tables, and the taxonomy at the
+top of the reference names all five kinds. Defining a category is a good way to
+find the things filed under it wrongly.
 
 ### Distribution, which is the actual product question
 
