@@ -1,7 +1,9 @@
 # c-contracts
 
-Contracts for C in one header. Clauses go on the declaration, your compiler
-type-checks them, and CBMC proves them for every input.
+Contracts for C in one header. Write preconditions, postconditions, and frame
+conditions on your functions. Clang type-checks them on every compile.
+[CBMC](https://www.cprover.org/cbmc/) can prove them correct for all possible
+inputs.
 
 ```c
 #include "c_contracts.h"
@@ -13,53 +15,56 @@ int divide(int a, int b)
 }
 ```
 
+Clang warns at any call site where `b` might be zero. CBMC proves no call can
+violate it, for every possible value of `a` and `b`:
+
 ```
 $ c-contracts prove divide demo.c
 divide: VERIFICATION SUCCESSFUL
 ```
 
-That is a proof, not a test: it holds for every `a` and every `b` the
-precondition allows. The same file compiles normally on any C compiler. GCC,
-MSVC and tcc preprocess the clause away; clang type-checks it at every call
-site via `diagnose_if`.
+That is a proof, not a test.
 
 ```sh
 curl -O https://raw.githubusercontent.com/cs01/c-contracts/main/include/c_contracts.h
 ```
 
 Copy it into your tree and commit it. The header is C89 with no includes of
-its own.
+its own. On compilers without `diagnose_if` (GCC, MSVC, tcc), every clause
+preprocesses away to the bare declaration.
 
 ## Why a wrapper
 
-`__CPROVER_requires` and friends break every build that is not CBMC. Projects
-work around this with private macro layers (AWS s2n has one, aws-c-common has a
-different one). This is that layer as one vendorable file.
+CBMC has its own contract syntax (`__CPROVER_requires`, etc.), but it breaks
+every compiler that is not CBMC. Projects work around this with private macro
+layers (AWS s2n has one, aws-c-common has a different one). This is that layer
+as one vendorable file.
 
 The problem with those wrappers: they expand to **nothing** outside CBMC. The
 spec becomes unparsed text between proof runs. A renamed field, a stale bound,
 a typo, all invisible until someone runs CBMC, which most projects rarely do.
 Here the fallback is `diagnose_if`, so an ordinary compile type-checks every
-clause in the function's own scope. Spec hygiene, not bug finding.
+clause in the function's own scope.
 
-## What each level catches
+## Three levels of checking
 
-Given `void sink(int n) contract_pre (n > 0);` with `enum { ZERO = 0 };` and
-`opaque()` an extern function:
+Contracts are checked at three levels, each catching more:
 
 | call site | compile | `check` | `prove` |
 |---|---|---|---|
 | `sink(0)` | warns | warns | proves |
-| `sink(ZERO)` | warns | warns | proves |
-| `sink(1 - 1)` | warns | warns | proves |
+| `sink(ZERO)` (enum) | warns | warns | proves |
 | `const int n = 0; sink(n)` | warns | warns | proves |
 | `int n = 0; sink(n)` | silent | warns | proves |
 | `int n = 0; if (opaque()) n = 5; sink(n)` | silent | silent | proves |
 | `sink(opaque())` | silent | silent | proves |
 
-The compiler folds constants. `check` adds an intra-procedural dataflow pass
-that sees through variables but only keeps facts that every path agrees on.
-Neither is a solver. Only `prove` is a guarantee.
+(Given `void sink(int n) contract_pre (n > 0);`)
+
+**Compile** folds constants and warns where it can see a violation. **`check`**
+adds a dataflow pass that tracks variables across assignments, but only keeps
+facts that every path agrees on. **`prove`** hands the function to CBMC, which
+checks every possible input. Only `prove` is a guarantee.
 
 ```
 $ c-contracts check <file> -- <your compile flags>
@@ -79,35 +84,29 @@ bound to a name and so cannot ride on `diagnose_if`.
 $ c-contracts prove <function> <file> -- <your compile flags>
 ```
 
-Needs CBMC 6+. The tool does not analyze contracts itself: preprocessing with
-`-DC_CONTRACTS_CPROVER` is the whole lowering, and the rest is `goto-cc`,
-`goto-instrument` and `cbmc`.
+Needs [CBMC](https://www.cprover.org/cbmc/) 6+. The tool preprocesses your
+source with `-DC_CONTRACTS_CPROVER` to lower the macros to CBMC's syntax, then
+runs CBMC.
 
 The entry point is generated from the preconditions, so you don't need a
-separate harness full of hand-written `__CPROVER_assume` that drifts from the
-actual function. `contract_fresh(p, n)` allocates; every other conjunct is
+separate harness. `contract_fresh(p, n)` allocates; every other conjunct is
 assumed; a parameter no clause mentions stays nondeterministic.
 `proofs/<function>.proof.c` overrides the generated entry point where a
 project's allocation shape must be written by hand.
 
-What this does beyond a shell script around CBMC:
+What this does beyond running CBMC directly:
 
 - **Missing-fresh check.** `contract_writes (p, n)` with no
   `contract_fresh (p, n)` beside it gets reported before a solver runs. Without
-  this, CBMC reports ten failures that are not defects.
-- **Vacuity check.** The preconditions are checked for satisfiability. A clean
-  run means no input satisfies the preconditions and the proof is vacuous.
-- **Solver racing.** Solve time varies up to 20x between backends. CBMC 6.11
-  with `--z3` aborts on some loop-contract binaries, so racing catches that too.
+  this, CBMC reports failures that are not defects.
+- **Vacuity check.** Verifies the preconditions are satisfiable. Otherwise the
+  proof is vacuous (true because nothing can satisfy the preconditions).
+- **Solver racing.** Solve time varies up to 20x between backends. Racing also
+  works around CBMC 6.11 aborting with `--z3` on some loop-contract binaries.
 
 One caveat: CBMC lets a loop's `contract_assigns` widen the function's frame
 inside that loop, and does not check that the loop's targets lie within the
 function's.
-
-Against zstd's decoder, `prove` verifies `ZSTD_wildcopy` memory-safe for every
-length in two seconds. On its first run it found undefined behaviour:
-`(BYTE*)dst - (const BYTE*)src` computed before the branch that guards the only
-case where both pointers are in the same object.
 
 | flag | does |
 |---|---|
@@ -133,11 +132,11 @@ Everything else below is shorthand for clauses or vocabulary you use inside one.
 
 | clause | means | checked by |
 |---|---|---|
-| `contract_pre (P)` | caller must establish `P` | compiler, tool, CBMC |
-| `contract_post (P)` | `P` holds on return | compiler |
-| `contract_returns (P)` | `P` holds on return, may name `contract_result` | tool, CBMC |
-| `contract_assigns (L)` | nothing outside `L` changes | CBMC |
-| `contract_writes_nothing()` | the frame is empty | CBMC |
+| `contract_pre (P)` | caller must establish `P` | compile, check, prove |
+| `contract_post (P)` | `P` holds on return | compile |
+| `contract_returns (P)` | `P` holds on return, may name `contract_result` | check, prove |
+| `contract_assigns (L)` | nothing outside `L` changes | prove |
+| `contract_writes_nothing()` | the frame is empty | prove |
 
 ### Predicates
 
@@ -149,7 +148,7 @@ containing a predicate; `contract_fresh(p, n)` on its own specifies nothing.
 |---|---|
 | `contract_readable (p, n)` | `n` bytes at `p` may be read |
 | `contract_writable (p, n)` | `n` bytes at `p` may be written |
-| `contract_fresh (p, n)` | `p` is an object of exactly `n` bytes that nothing else visible aliases |
+| `contract_fresh (p, n)` | `p` is an object of exactly `n` bytes that nothing else aliases |
 | `contract_same_object (p, q)` | `p` and `q` point into one object |
 | `contract_disjoint (p, q)` | they do not |
 | `contract_forall (i, lo, hi, P)` | `P` holds for every `i` in `[lo, hi)` |
@@ -223,21 +222,6 @@ hand.
 Two roles, not three. A function that reads then writes carries both.
 `contract_reads` is what says the caller must have initialized the memory.
 
-How much they help depends on the function. Over zstd:
-
-| function | roles | primitives |
-|---|---|---|
-| `HUF_readStats` | 5 | 0 |
-| `FSE_readNCount` | 5 | 0 |
-| `HUF_decompress1X_usingDTable` | 2 | 0 |
-| `BIT_initDStream` | 2 | 1 |
-| `ZSTD_overlapCopy8` | 1 | 5 |
-| `ZSTD_wildcopy`, `ZSTD_safecopy`, `ZSTD_execSequence` | 0 | 23 |
-
-API boundaries with `(buffer, capacity)` parameters: a role usually says the
-whole thing. Hot-path internals with interior pointers and over-copy slack:
-roles cover the boring part.
-
 ## Gotchas
 
 - **Write `0`, not `NULL`.** `contract_pre (p != NULL)` does not compile.
@@ -293,9 +277,7 @@ and the tooling around it.
 `prove` is the least finished part, and also the part a user gets value from,
 which is the wrong way round. It takes several files but only one function name
 per run, and cannot find the annotated functions itself. It caches nothing, so
-every run re-solves from scratch. It emits text and no report. Its generated
-entry point discharges all seven proof fixtures, but the one real zstd function
-needed a hand-written entry point.
+every run re-solves from scratch. It emits text and no report.
 
 `check` does less than the table above may suggest: it is spec hygiene, not bug
 finding.
