@@ -1,8 +1,13 @@
 # Worksheet: contracts for C without a clang fork
 
-Started 2026-09-09. Status: **phase 1 complete**. The tool skeleton, B2 and B3
-are done and committed, all three open questions in section 7 are settled, and
-the whole thing has been run against real zstd.
+Started 2026-09-09, still live 2026-09-10. Status: **phase 1 complete and
+published** at github.com/cs01/c-contracts. The tool skeleton, B2 and B3 are
+done, all three open questions in section 7 are settled, and the whole thing
+runs against real zstd.
+
+Since then the annotation language itself changed shape: one spelling instead of
+two, everything prefixed `contract_`, header version 2. Section 10 is what is
+left.
 
 A fresh agent should be able to pick this up from this file alone. Read it,
 then `README.md` for what the thing is. Section 5 records what B3 turned out to
@@ -93,7 +98,6 @@ Header tests worth knowing about, because they are what breaks when you edit it:
 | test | pins |
 |---|---|
 | `c-contracts-macro-layer.c` | all four targets on one source, prefixed spelling |
-| `c-contracts-macro-unprefixed.c` | the `C_CONTRACTS_NO_PREFIX` aliases |
 | `c-contracts-macro-inplace-post.c` | `post` checked in place, and the `-DC_CONTRACTS_NO_INPLACE_POST` opt-out |
 | `c-contracts-macro-strip.c` | the GCC/MSVC/tcc branch, reached with `-DC_CONTRACTS_STOCK=0` |
 
@@ -103,7 +107,7 @@ Header tests worth knowing about, because they are what breaks when you edit it:
 |---|---|
 | `CMakeLists.txt` | `find_package(Clang)`; `project(... C CXX)` because LLVMConfig probes libedit with `check_include_file` |
 | `src/Contract.h` | `ClauseKind`, `Clause`, `Contract`, and the entry points |
-| `src/Extract.cpp` | `DiagnoseIfAttr` -> Pre, `AnnotateAttr` `"c_post:"`/`"c_returns:"` -> the rest |
+| `src/Extract.cpp` | `DiagnoseIfAttr` -> Pre, `AnnotateAttr` `"contract_post:"`/`"contract_returns:"` -> the rest, and `headerVersion()` |
 | `src/Ghost.cpp` | synthesis, reparse, diagnostic remapping. Now only needed for `returns` and the frame, since `post` is checked in place |
 | `src/CallSite.{h,cpp}` | B2, the CFG dataflow |
 | `src/main.cpp` | subcommand dispatch, the options, exit status, pass wiring |
@@ -113,8 +117,16 @@ Header tests worth knowing about, because they are what breaks when you edit it:
 | `test/prove.sh` + 7 cases | the CBMC tier end to end; skips when cbmc is absent |
 | `test/differential.sh` | this lowering against the fork's, clause for clause; skips when the fork is absent |
 | `test/zstd.sh` | both tiers on real zstd; skips when the checkout is absent |
+| `test/header.sh` | the header alone, with **nothing but a C compiler** |
 
-Gates: **6/6 fixtures, 7/7 proofs, differential as recorded, zstd 2/2.**
+Gates: **12/12 header, 6/6 fixtures, 7/7 proofs, differential as recorded, zstd
+2/2**, plus 35/35 lit in the fork.
+
+`test/header.sh` is the one that matters for a vendored copy: it needs no LLVM,
+no cbmc and no fork, because a project that copies the header and edits it --
+everybody edits it -- has none of those. `C_CONTRACTS_VERSION` exists for the
+same reason, and `RequiredHeaderVersion` in `src/Contract.h` moves with it, so
+a stale vendored copy is reported rather than silently producing no clauses.
 
 ```sh
 cd ~/git/c-contracts
@@ -720,9 +732,116 @@ output buffer, so `fresh(dst, ...)` on the function itself would be false and
 would oblige every caller to something zstd does not do. Keeping it in the proof
 file leaves zstd's contract saying only what callers actually owe.
 
+**Merged with the other annotation branch, 2026-09-10.** Someone else's session
+had pushed to `cs01/zstd contracts-annotations` independently: the same
+pointer-subtraction fix, equivalent loop contracts, and a `CONTRACTS.md`.
+Resolved to this side's source, which was ahead in three ways -- the
+`contract_` spelling, the re-vendored header, and the `do` loops rewritten to
+`while (1)` so `goto-instrument` will accept a contract on them. Kept their
+`CONTRACTS.md` and their `ZSTD_safecopy` contract, which ports cleanly and took
+zstd from 10 clauses to 12. Dropped their `ZSTD_execSequence` preconditions:
+they rest on `pointer_in_range`, which is in neither header, and section 10
+records why that predicate does not currently work anyway. Their branch compiled
+only because its vendored header predated the stock-clang target and stripped
+every clause.
+
 **`ZSTD_execSequence` does not converge.** 180s with both solvers, no verdict.
 It is the hardest function in the set -- COST.md says so, and the fork needed
 `--object-bits 12` and a much more careful harness. The generated entry point
 also cannot allocate for it, because the contract has `readable(*litPtr, ...)`
 with no `fresh`, which is precisely what the writes-without-fresh diagnostic
 says when you run it.
+
+## 10. 2026-09-10: one spelling, and what is still open
+
+### The language surface changed
+
+`c_pre` and the `C_CONTRACTS_NO_PREFIX` opt-in are both gone. There is one
+spelling, `contract_pre`, always available. Three reasons, in order of weight:
+
+1. The bare spelling took words as common as `pre`, `range` and `result` out of
+   a project's namespace, and making it opt-in only moved that decision to
+   whoever included the header first.
+2. `c_` is a namespace other people are already in: zstd's own source has a
+   `c_str`. And `c_result` / `c_ssize_t` / `c_ghost` / `c_writes_nothing` are
+   object-like, so they rewrote every occurrence of a fairly generic token.
+3. It deletes a whole bug class. `post`, `returns` and `assigns` had to be
+   spelled out per target because forwarding `pre(P)` to `c_pre(P)` triggered
+   the argument prescan and expanded the predicates before `#P` could quote
+   them (section 6). Nothing forwards to anything now, so a marker quotes
+   exactly what the author wrote.
+
+Lowercase rather than AWS's `CONTRACT_REQUIRES`, because a clause should read as
+part of the declaration rather than as macro noise.
+
+Cost: lit lost two tests that existed only to check the opt-in, and everything
+downstream had to move. Version 2.
+
+### What the README got wrong, and how it was caught
+
+Worth recording because the same trap will recur: **every example in a README is
+a claim, and none of them were being run.** Extracting the headline block and
+executing it found that it did not compile (`size_t` with no include), and then
+that it did not produce the output printed under it -- an unannotated `for` loop
+drops `prove` into harness mode with no bound, where it does not terminate. The
+roles table also showed `((char *)p)[0 : n]`, which is the fork's grammar: the
+header drops it silently and goto-cc then rejects it.
+
+There is no gate on the README. That is the obvious next one.
+
+### `__CPROVER_pointer_in_range` is unsatisfiable under `--enforce-contract`
+
+Found while merging the other zstd branch, which used a `pointer_in_range`
+predicate that is in neither header. Measured on cbmc 6.11:
+
+```c
+void f(char *base, char *p)
+  __CPROVER_requires(__CPROVER_is_fresh(base, 64))
+  __CPROVER_requires(__CPROVER_pointer_in_range(base, p, base + 64))
+{ __CPROVER_assert(0, "vacuity probe"); }
+```
+
+`goto-instrument --enforce-contract` then `cbmc` reports **VERIFICATION
+SUCCESSFUL**, so the preconditions cannot be satisfied and anything proved under
+them is proved of nothing. `__CPROVER_pointer_in_range_dfcc` is the variant
+CBMC's contracts machinery uses; `goto-instrument --dfcc` segfaulted on the test
+harness here, so whether the predicate is usable at all in this mode is open.
+
+**The lesson is about method, not about that predicate.** The first reading of
+this experiment was that the predicate *was* modelled, because an assertion
+after it verified clean. That is what a vacuous assumption looks like from the
+inside. Always run the `assert(0)` probe before believing a SUCCESSFUL.
+
+### Open, in the order worth doing
+
+1. **`contract_writes_nothing` is object-like** where every other clause is
+   function-like. The last inconsistency in the surface. `contract_writes_nothing()`.
+2. **`prove` has no project mode.** One function per invocation, no caching, no
+   report. The empirical study on unit proofs (arXiv 2503.13762, 73 proofs over
+   four embedded OSes) measures 87 minutes to write a proof and 61 minutes to
+   run one; without caching a suite is unusable. This is the thing standing
+   between the tool and a user.
+3. **A gate on the README's examples.** See above.
+4. **Three unit conventions.** `contract_writes(p, n)` is bytes,
+   `contract_writes_n(p, n)` is elements, `contract_range(p, lo, hi)` is
+   elements and half open. Each has a reason; together they are a trap. No fix
+   proposed, but it should be a deliberate decision rather than an accident.
+5. **`findConflictingHarnessFresh`** is still unported from the fork.
+6. **The `post` rule the differential gate found:** the fork demands `old(n)`
+   for a by-value parameter where this accepts a bare `n`. Measured equivalent
+   under CBMC, so it is strictness rather than soundness, but it is the first
+   thing worth taking from the fork's checking half.
+7. **A loop `assigns` silently widens the function frame** (section 5). Nobody
+   checks containment.
+
+### Distribution, which is the actual product question
+
+The header is the artifact people will copy. `stb`-style vendoring is the right
+mechanism and needs nothing built. What it still lacks: a CMake `INTERFACE`
+target for `FetchContent`, and a vcpkg or Conan port. Both trivial for a
+header-only file.
+
+The **binary** is the harder half and is worse than the incumbents'.
+`pip install cbmc-starter-kit` against "have an LLVM install shipping
+ClangConfig.cmake, then cmake and ninja this". A Homebrew formula and prebuilt
+per-platform binaries would fix it; neither exists.
