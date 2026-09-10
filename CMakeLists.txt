@@ -16,9 +16,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(c-contracts
   src/main.cpp
+  src/CProver.cpp
   src/CallSite.cpp
   src/Extract.cpp
   src/Ghost.cpp
+  src/Prove.cpp
 )
 
 target_include_directories(c-contracts SYSTEM PRIVATE
@@ -45,4 +47,12 @@ endif()
 enable_testing()
 add_test(NAME suite
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run.sh $<TARGET_FILE:c-contracts>)
-
+# The proof suite needs CBMC and the differential gate needs the fork; both skip
+# loudly rather than fail when their prerequisite is missing, so both are always
+# registered.
+add_test(NAME proofs
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/prove.sh $<TARGET_FILE:c-contracts>)
+add_test(NAME differential
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/differential.sh $<TARGET_FILE:c-contracts>)
+add_test(NAME zstd
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/zstd.sh $<TARGET_FILE:c-contracts>)

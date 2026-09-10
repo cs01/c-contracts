@@ -1,0 +1,16 @@
+lowered 4 clause(s):
+  __CPROVER_requires(n > 0 && n < 8)
+  __CPROVER_requires(__CPROVER_is_fresh((dst), (n)))
+  __CPROVER_requires((!__CPROVER_same_object((dst), (src))))
+  __CPROVER_assigns(__CPROVER_object_upto((dst) + (0), ((n) - (0)) * sizeof(*(dst))))
+mode: caller (preconditions are obligations)
+copy: VERIFICATION FAILED
+exit 1
+lowered 4 clause(s):
+  __CPROVER_requires(n > 0 && n < 8)
+  __CPROVER_requires(__CPROVER_is_fresh((dst), (n)))
+  __CPROVER_requires((!__CPROVER_same_object((dst), (src))))
+  __CPROVER_assigns(__CPROVER_object_upto((dst) + (0), ((n) - (0)) * sizeof(*(dst))))
+mode: caller (preconditions are obligations)
+copy: VERIFICATION SUCCESSFUL
+exit 0

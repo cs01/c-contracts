@@ -1,0 +1,8 @@
+lowered 3 clause(s):
+  __CPROVER_requires(n > 0)
+  __CPROVER_requires(n < 1000)
+  __CPROVER_ensures(__CPROVER_return_value > __CPROVER_old(n))
+mode: enforce (frame checked)
+vacuity: wrong's preconditions are satisfiable
+wrong: VERIFICATION FAILED
+exit 1
