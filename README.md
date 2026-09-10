@@ -1,7 +1,8 @@
 # c-contracts
 
-Prove a C function correct for every input, from annotations that survive an
-ordinary build.
+c-contracts is a contract language for C, in one header you copy into your
+project. Clauses go on the declaration, where your own compiler type-checks
+them, and CBMC proves them for every input.
 
 ```c
 #include <stddef.h>
@@ -152,9 +153,14 @@ either shorthand for clauses or vocabulary used inside one.
 
 ### Roles
 
-**A role is one word that expands to several clauses.** Buffer parameters want
-the same two or three clauses almost every time, so these say it once. Anything
-a role can say, you can also write out by hand.
+**A role is one word that expands to several clauses.** Nothing more: it is
+sugar, and anything a role says you can write out by hand.
+
+Worth knowing before you reach for one: in the only real codebase annotated with
+this so far, roles are used **zero** times. Real functions want a size
+expression a role cannot take (`length + WILDCOPY_OVERLENGTH`), or do not want
+the `p != 0` a role bundles, or want to state the frame differently. Reach for
+`contract_pre (contract_readable(p, n))` first.
 
 **Watch the units.** `contract_reads`/`contract_writes` count **bytes**, like
 `memcpy`. The `_n` forms count **elements** of a typed pointer.
