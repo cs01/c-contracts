@@ -118,5 +118,6 @@ grammar. It is not shipped and not required; it exists as the differential
 oracle this tool is checked against.
 
 `docs/worksheets/2026-09-09-port-from-fork.md` is the working plan: what is
-done, what the two remaining ports need, the gotchas already paid for, and the
-open questions.
+done, what the remaining port needs, the gotchas already paid for, and the
+decisions behind the surface language. It is written so someone can finish from
+it without this conversation.

@@ -60,16 +60,18 @@ names its own return type, which it otherwise cannot. In a scope whose
 parameters *are* the entry values, `old(x)` is `x`, so the preamble defines
 `c_old(E)` to `(E)`.
 
-## 3. What is done
+## 3. What is done, and how to build it
 
-### Fork: `llvm-contracts` commit `04ebeaa82dfe`
+### Fork: `~/git/llvm-contracts`, branch `contracts-c-dev`
 
-`clang/lib/Headers/c_contracts.h` gained a fourth target, selected when
-`__has_attribute(diagnose_if)` and no other target claimed the file.
-`clang/test/Sema/c-contracts-macro-layer.c` updated: it asserted the header
-vanishes without `-fc-contracts`, which is what we deliberately changed.
+The fork is **not the product**. It stays alive as the differential oracle and
+as the source the ports are copied from. It only has to build.
 
-Gate: 35/35 lit.
+It carries the shared `clang/lib/Headers/c_contracts.h`, which is the one file
+both repos own. `tools/sync-header.sh` keeps the vendored copy honest; the fork
+is the source of truth.
+
+Gate: **37/37 lit.**
 
 ```sh
 cd ~/git/llvm-contracts
@@ -81,20 +83,32 @@ ninja -C build-arm clang clang-resource-headers
 
 `ninja clang-resource-headers` is **not optional** after touching the header:
 lit reads the copy under `build-arm/lib/clang/24/include/`, and a stale copy
-produces failures that have nothing to do with your change.
+produces failures that have nothing to do with your change. Note that ninja
+compares mtimes, so restoring a header from a backup with `cp`/`mv` can leave
+the stale copy in place -- `touch` it before rebuilding.
 
-### This repo: commit `4695e69`
+Header tests worth knowing about, because they are what breaks when you edit it:
 
-| file | lines | does |
-|---|---|---|
-| `CMakeLists.txt` | 40 | `find_package(Clang)`; `project(... C CXX)` because LLVMConfig probes libedit with `check_include_file` |
-| `src/Contract.h` | 99 | `ClauseKind`, `Clause`, `Contract`, and the two entry points |
-| `src/Extract.cpp` | 132 | `DiagnoseIfAttr` → Pre, `AnnotateAttr` `"c_post:"`/`"c_returns:"` → the rest |
-| `src/Ghost.cpp` | 284 | synthesis, reparse, diagnostic remapping |
-| `src/main.cpp` | 187 | `--list`, `--warnings-as-errors`, exit status |
-| `test/run.sh` + 3 cases | | fixture runner, `UPDATE=1` to rebless, filter arg |
+| test | pins |
+|---|---|
+| `c-contracts-macro-layer.c` | all four targets on one source, prefixed spelling |
+| `c-contracts-macro-unprefixed.c` | the `C_CONTRACTS_NO_PREFIX` aliases |
+| `c-contracts-macro-inplace-post.c` | `post` checked in place, and the `-DC_CONTRACTS_NO_INPLACE_POST` opt-out |
+| `c-contracts-macro-strip.c` | the GCC/MSVC/tcc branch, reached with `-DC_CONTRACTS_STOCK=0` |
 
-Build and gates:
+### This repo: `~/git/c-contracts`, branch `main`
+
+| file | does |
+|---|---|
+| `CMakeLists.txt` | `find_package(Clang)`; `project(... C CXX)` because LLVMConfig probes libedit with `check_include_file` |
+| `src/Contract.h` | `ClauseKind`, `Clause`, `Contract`, and the entry points |
+| `src/Extract.cpp` | `DiagnoseIfAttr` -> Pre, `AnnotateAttr` `"c_post:"`/`"c_returns:"` -> the rest |
+| `src/Ghost.cpp` | synthesis, reparse, diagnostic remapping. Now only needed for `returns` and the frame, since `post` is checked in place |
+| `src/CallSite.{h,cpp}` | B2, the CFG dataflow |
+| `src/main.cpp` | `--list`, `--warnings-as-errors`, exit status, and the pass wiring |
+| `test/run.sh` + 5 cases | fixture runner, `UPDATE=1` to rebless, filter arg |
+
+Gate: **5/5 fixtures.**
 
 ```sh
 cd ~/git/c-contracts
@@ -102,14 +116,28 @@ cmake -G Ninja -B build -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
 ninja -C build && ./test/run.sh build/c-contracts && ./tools/sync-header.sh
 ```
 
+`UPDATE=1 ./test/run.sh build/c-contracts [filter]` reblesses. Read the diff
+first: a fixture changing usually means a real behaviour change, not a stale
+expectation. Two of the five (`extract`, `badpost`) were reblessed once, when
+the markers started quoting clauses exactly as written; that was an improvement,
+and it is the only time so far.
+
 Working end to end:
 
 ```
 $ ./build/c-contracts t.c -- -std=c89 -Iinclude
-t.c:8:36:  error: use of undeclared identifier 'dstCapp'; did you mean 'dstCap'?
-t.c:11:16: error: use of undeclared identifier 'c_result'
-t.c:15:19: error: invalid operands to binary expression ('typeof (c(n))' (aka 'struct S') and 'int')
+t.c:8:36:  error: use of undeclared identifier 'dstCapp'
+t.c:19:3:  warning: precondition n > 0 of 'allocate' is violated by this call
 ```
+
+### Checking tiers as they actually stand
+
+| clause | stock clang alone | this tool | CBMC |
+|---|---|---|---|
+| `pre` | folds at the call site | B2 catches it through a variable | `__CPROVER_requires` |
+| `post` | **type-checked in place** | ghost (redundant, kept as fallback) | `__CPROVER_ensures` |
+| `returns` | nothing | ghost type-checks it | `__CPROVER_ensures` |
+| `assigns`, loop contracts | nothing | nothing | the whole point of B3 |
 
 ## 4. DONE: B2 — the call-site dataflow pass
 
@@ -209,6 +237,65 @@ genuinely unknown. Add it as `test/cases/callsite.c` + `.expected`.
 
 ## 5. Next: B3 — the CBMC emitter and `prove`
 
+**Everything B3 depends on is settled.** All three questions in section 7 are
+answered, the toolchain is present and was exercised end to end this session,
+and the numbers below were measured rather than assumed. Start here.
+
+### The environment, verified 2026-09-09
+
+`cbmc`, `goto-cc` and `goto-instrument` are installed (`/opt/homebrew/bin`,
+cbmc 6.x, which is what the loop-contract handling needs). No `z3` or
+`bitwuzla`: `proofs/solve.sh` races whatever is installed, and without an SMT
+solver the symbolically-allocated harnesses take minutes rather than seconds.
+
+**`proofs/verify-contract.sh` defaults `CLANG` to `../build/bin/clang`, which
+does not exist on this machine.** Pass `CLANG=$PWD/build-arm/bin/clang`. Every
+invocation below does.
+
+Also note `cc` is shadowed in this shell by something that prints `Copied:`.
+Use `/usr/bin/clang -E` explicitly when driving the preprocessor by hand;
+`verify-contract.sh` calls `cc` internally and works fine non-interactively.
+
+### The numbers B3 has to reproduce
+
+Measured with the real toolchain, on the simplest functions that exist:
+
+| function | clauses | CBMC |
+|---|---|---|
+| `zero_writes` | `writes (p, n)` | 10 of 139 failed -- FAILED |
+| `zero_fresh` | `pre (fresh(p,n))` + `assigns (range(p,0,n))` | 0 of 139 -- SUCCESSFUL |
+| `copy` | `fresh` + `fresh` + `disjoint` | 0 of 139 -- SUCCESSFUL |
+
+`writes` alone does not discharge. That is settled behaviour, not a bug to fix:
+see (a) in section 7. What B3 owes the user is a *diagnostic* rather than ten
+mystery failures.
+
+### Extra work B3 owns, from decision (a)
+
+`prove` must detect the shape that cannot discharge and say so. A function with
+`writes`/`writes_n` on a pointer parameter and no `fresh` on that same pointer
+gets a diagnostic naming the missing clause, before CBMC is ever invoked.
+Without it the user sees "10 of 139 failed" and goes looking for a bug in their
+own code. This is the single highest-value thing in B3 after `prove` working at
+all.
+
+### Caller mode, which the plan did not have
+
+`--enforce-contract` verifies a function against its own contract, and there a
+precondition is an *assumption*. Preconditions only become *obligations* when
+verifying a caller, which is a different goto-instrument pass:
+
+```sh
+goto-instrument --replace-call-with-contract <callee> in.goto out.goto
+cbmc --function <caller> out.goto
+```
+
+Confirmed working this session: with `pre (disjoint(dst, src))` on `copy`, a
+caller doing `copy(a, a, 4)` fails precondition `.4` and a caller doing
+`copy(a, b, 4)` passes all four; delete the clause and the aliasing caller
+verifies clean. `prove` should expose this, because it is the only mode in
+which most preconditions are checked at all.
+
 **Source:** `~/git/llvm-contracts/clang/lib/Sema/SemaContracts.cpp`, 1446 lines.
 Only the emitter half is wanted. The named functions:
 
@@ -269,7 +356,7 @@ which catches literal contradictions on one variable; the interesting ones are
 semantic (`pre(fresh(p, n))` with an `n` the harness cannot allocate) and only
 appear under the solver.
 
-Cost, so it is not a surprise: this doubles solver time, and `proofs/COST.md`
+Cost, so it is not a surprise: this doubles solver time, and `proofs/zstd/COST.md`
 records up to 20x between solvers on the same goto binary. Budget against e2e
 case 7, which holds a proof to 60s. If that hurts, the escape hatch to build
 next is caching the vacuity verdict per function keyed on the contract text, so
@@ -283,7 +370,26 @@ fixture report success.
 **Done looks like:** `c-contracts prove <fn> <file>` reaching VERIFICATION
 SUCCESSFUL on `test/cases/`-style fixtures, plus a differential gate: the
 emitted CBMC text matches the fork's `-fcontract-emit-cprover-unit` byte for
-byte on the fork's existing lit fixtures.
+byte on the fork's existing lit fixtures. That differential is the whole reason
+the fork is still alive; build it early, not last.
+
+**Suggested order**, smallest provable step first:
+
+1. `prove` as a thin wrapper over `verify-contract.sh`'s existing pipeline, one
+   function, one file, no harness generation. It already works; make it a
+   subcommand.
+2. The differential gate against `-fcontract-emit-cprover-unit`. Cheap once (1)
+   exists, and it is what stops the emitter drifting.
+3. The `writes`-without-`fresh` diagnostic. Highest user value per line.
+4. Harness generation from preconditions, with `proofs/<fn>.proof.c` on disk
+   winning over the generated one.
+5. The vacuity gate.
+6. Caller mode (`--replace-call-with-contract`).
+
+**Budget it.** CBMC runs are minutes, and the vacuity gate doubles that. Do not
+put a full proof in `test/run.sh`, which is a fast fixture runner -- proofs need
+their own target with their own timeout, and e2e case 7 in the fork holds a
+proof to 60s as the reference for what is affordable.
 
 ## 6. Gotchas already paid for
 
@@ -314,6 +420,31 @@ byte on the fork's existing lit fixtures.
   probing upward from the predicate line finds the *previous* ghost.
 - **`llvm::outs()` and `llvm::errs()` do not flush in a fixed order.**
   `test/run.sh` captures them separately and joins them deterministically.
+
+### Paid for on 2026-09-09
+
+- **The argument prescan bites anything that stringizes, not just `assigns`.**
+  `#P` only sees raw text when the stringizing macro is the *first* one the
+  author's text reaches. `post(P)` forwarding to `c_post(P)` expanded the
+  predicates on the way through, so `old(n)` reached the marker as `(n)`. `post`
+  and `returns` are now spelled out per target, like `assigns` always was. If
+  you add another clause that quotes itself, spell it out per target from the
+  start.
+- **ninja compares mtimes, so restoring a file from a backup can leave a stale
+  resource-header copy.** `touch` the header before rebuilding. This cost a
+  confusing "the test fails after I reverted my change".
+- **A negative test cannot pin a positive behaviour.** B2's fixture had a case
+  for "the function's own preconditions seed the entry state" that asserted
+  *silence*. It passed whether or not seeding worked -- and seeding was in fact
+  broken for the ordinary prototype-plus-definition layout. Any feature whose
+  success looks like "no output" needs a case where the feature's absence
+  *produces* output.
+- **Write the gate, then break it on purpose and watch it fail.** Every gate
+  added this session was audited that way, and two of them did not fail on the
+  first attempt: a loop fixture with a literal bound made the broken pass drop
+  the block silently instead of misjudging it, and a branch-merge fixture's
+  outcome depended on which predecessor the CFG happened to list first. Both
+  needed rewriting before they were tests at all.
 
 ## 7. Decisions and open questions
 
@@ -366,7 +497,8 @@ README used to show one.
 **Implemented and measured 2026-09-09.** `c_disjoint` / `disjoint` is in the
 header across the three targets that have a predicate layer, defined as
 `!same_object` so it needs no new never-defined helper on the stock-clang
-target. Lit: 35/35, and the new CHECK was perturbed to confirm it fails when it
+target. Lit was 35/35 as of that commit (37 now, after the two tests added
+later the same day), and the new CHECK was perturbed to confirm it fails when it
 should. Measured with the real toolchain (`proofs/verify-contract.sh`, cbmc
 6.x):
 
@@ -433,8 +565,11 @@ late-parsed attribute argument segfaults the parser. Reproduced on Homebrew
 void f(int n) __attribute__((diagnose_if(0 && ({ int r; r > n; }), "m", "warning")));
 ```
 
-Worth reporting upstream. Until it is fixed, `returns` stays a quoted marker and
-the ghost pass is what checks it, so **the ghost pass does not go away**.
+Not yet reported upstream. The full write-up, with the stack, the affected
+versions and the `enable_if` contrast that localises it to the `diagnose_if`
+path, is in `docs/clang-diagnose_if-stmtexpr-crash.md` -- ready to file. Until
+it is fixed, `returns` stays a quoted marker and the ghost pass is what checks
+it, so **the ghost pass does not go away**.
 
 `__typeof__(f(args))` *does* resolve inside `f`'s own `diagnose_if` — the
 function is in scope there — so the return type is nameable in place. Only
