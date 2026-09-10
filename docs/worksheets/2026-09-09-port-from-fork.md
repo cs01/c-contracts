@@ -844,7 +844,7 @@ inside `contract_assigns`. They are now three tables, and the taxonomy at the
 top of the reference names all five kinds. Defining a category is a good way to
 find the things filed under it wrongly.
 
-### Roles are used zero times on the only real codebase
+### Roles: the zero was a biased sample, not a verdict
 
 Measured 2026-09-10 over the annotated zstd, excluding the vendored header:
 
@@ -866,11 +866,30 @@ judgment in them is which clauses to bundle, and decision (a) in section 7 is
 the one call that mattered -- that `contract_writes` claims nothing about
 aliasing.
 
-Not deleted yet, because n=1 and the one codebase was annotated by the same
-people who wrote the header. The README now says plainly that they are sugar
-and that nobody has used them. If that is still true after a second project,
-delete them: this language's whole argument is that it is small enough to
-vendor.
+**Retested the same day by annotating more of zstd, and the conclusion
+reversed.** Everything annotated before was a hot-path internal, which is the
+one shape roles cannot serve. Four API-boundary functions and one more hot-path
+function, annotated to say what each actually requires:
+
+```
+                                  roles  primitives
+  HUF_readStats                     5        0
+  FSE_readNCount                    5        0
+  HUF_decompress1X_usingDTable      2        0
+  BIT_initDStream                   2        1
+  ZSTD_overlapCopy8                 1        5
+```
+
+So roles earn their keep exactly where a parameter is a `(buffer, capacity)`
+pair, and earn nothing where the pointers are interior and the sizes carry
+over-copy slack. Keep them. The README now states the split with the numbers
+rather than recommending against them, which is what it said for about an hour.
+
+Method note, since this is the second time in two days: a count of zero over a
+sample nobody chose for the question is not evidence. Annotating five more
+functions cost twenty minutes and reversed the conclusion.
+
+The work lives on the `role-experiment` branch of the zstd checkout.
 
 ### Distribution, which is the actual product question
 

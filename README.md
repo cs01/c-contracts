@@ -153,14 +153,26 @@ either shorthand for clauses or vocabulary used inside one.
 
 ### Roles
 
-**A role is one word that expands to several clauses.** Nothing more: it is
-sugar, and anything a role says you can write out by hand.
+**A role is one word that expands to several clauses.** Sugar: anything a role
+says you can write out by hand.
 
-Worth knowing before you reach for one: in the only real codebase annotated with
-this so far, roles are used **zero** times. Real functions want a size
-expression a role cannot take (`length + WILDCOPY_OVERLENGTH`), or do not want
-the `p != 0` a role bundles, or want to state the frame differently. Reach for
-`contract_pre (contract_readable(p, n))` first.
+Whether they help depends entirely on what you are annotating. Measured over
+zstd:
+
+| function | roles | primitives |
+|---|---|---|
+| `HUF_readStats` | 5 | 0 |
+| `FSE_readNCount` | 5 | 0 |
+| `HUF_decompress1X_usingDTable` | 2 | 0 |
+| `BIT_initDStream` | 2 | 1 |
+| `ZSTD_overlapCopy8` | 1 | 5 |
+| `ZSTD_wildcopy`, `ZSTD_safecopy`, `ZSTD_execSequence` | 0 | 23 |
+
+At an **API boundary**, where a parameter is a `(buffer, capacity)` pair, a role
+usually says the whole thing. In **hot-path internals**, where the pointers are
+interior, the sizes carry over-copy slack and the interesting requirements are
+aliasing and offsets, roles cover the least interesting clause and you write the
+rest by hand.
 
 **Watch the units.** `contract_reads`/`contract_writes` count **bytes**, like
 `memcpy`. The `_n` forms count **elements** of a typed pointer.
