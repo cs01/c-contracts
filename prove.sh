@@ -1,11 +1,14 @@
 #!/bin/sh
 # Prove a function's contract with CBMC.
 #
-#   ./prove.sh <function> <source.c> [-I dir ...] [-- cbmc flags]
+#   ./prove.sh <function> <source.c> [-I dir ...] [-r dep ...] [-- cbmc flags]
 #
 # No harness needed. The contract annotations are the spec: prove.sh
 # preprocesses them to CBMC syntax, and --enforce-contract generates
 # the entry point from preconditions automatically.
+#
+# -r dep   modular verification: trust dep's contract instead of inlining it.
+#          Use after proving dep separately. Repeat for multiple dependencies.
 #
 # Needs: a C preprocessor (cc), goto-cc, goto-instrument, cbmc (all CBMC 6+).
 set -eu
@@ -14,20 +17,26 @@ FN=${1:?usage: prove.sh <function> <source.c> [-I dir ...] [-- cbmc flags]}
 SRC=${2:?usage: prove.sh <function> <source.c> [-I dir ...] [-- cbmc flags]}
 shift 2
 
-CFLAGS=""; CBMC_FLAGS=""
+CFLAGS=""; CBMC_FLAGS=""; REPLACE=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    -r) REPLACE="$REPLACE $2"; shift 2 ;;
     --) shift; CBMC_FLAGS="$*"; break ;;
     *)  CFLAGS="$CFLAGS $1"; shift ;;
   esac
 done
-[ -n "$CBMC_FLAGS" ] || CBMC_FLAGS="--pointer-overflow-check --bounds-check --pointer-check"
+[ -n "$CBMC_FLAGS" ] || CBMC_FLAGS="--pointer-overflow-check --bounds-check --pointer-check --malloc-may-fail"
 
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 
 # 1. Preprocess: contract macros become CBMC builtins.
+# Disable platform intrinsics that goto-cc cannot parse (ARM NEON, SVE, etc.).
+PLATFORM_FLAGS=""
+case "$(uname -m)" in
+  arm64|aarch64) PLATFORM_FLAGS="-U__ARM_NEON -U__ARM_FEATURE_SVE -U__ARM_FEATURE_SVE2" ;;
+esac
 # shellcheck disable=SC2086
-cc -E -DC_CONTRACTS_CPROVER ${CPPFLAGS:-} $CFLAGS "$SRC" -o "$W/pp.i" 2>"$W/cpp.log" || {
+cc -E -DC_CONTRACTS_CPROVER $PLATFORM_FLAGS ${CPPFLAGS:-} $CFLAGS "$SRC" -o "$W/pp.i" 2>"$W/cpp.log" || {
   echo "preprocessing $SRC failed:" >&2
   grep -m5 "error:" "$W/cpp.log" >&2; exit 2; }
 
@@ -43,7 +52,13 @@ goto-cc "$W/pp.i" -o "$W/a.goto" 2>"$W/goto.log" || {
 goto-instrument --apply-loop-contracts "$W/a.goto" "$W/b.goto" >/dev/null 2>&1 ||
   cp "$W/a.goto" "$W/b.goto"
 
-goto-instrument --enforce-contract "$FN" "$W/b.goto" "$W/c.goto" 2>"$W/enforce.log" || {
+REPLACE_FLAGS=""
+for R in $REPLACE; do
+  REPLACE_FLAGS="$REPLACE_FLAGS --replace-call-with-contract $R"
+done
+
+# shellcheck disable=SC2086
+goto-instrument --enforce-contract "$FN" $REPLACE_FLAGS "$W/b.goto" "$W/c.goto" 2>"$W/enforce.log" || {
   if grep -qi "loops remain" "$W/enforce.log"; then
     echo "$FN has loops without contracts:" >&2
     echo "  add contract_assigns / contract_invariant / contract_decreases to each loop" >&2

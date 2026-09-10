@@ -45,7 +45,7 @@
  * and c-contracts reports a copy older than the one it was built against,
  * rather than quietly finding no clauses.
  */
-#define C_CONTRACTS_VERSION 3
+#define C_CONTRACTS_VERSION 4
 
 /* Marks a declaration that exists only to be named by an annotation. Such a
  * variable is genuinely unused once the annotations vanish, so without this
@@ -155,6 +155,15 @@
   __CPROVER_object_upto((P) + (LO), ((HI) - (LO)) * sizeof(*(P)))
 #define contract_forall(I, LO, HI, P)                                                 \
   __CPROVER_forall { unsigned long I; ((I) >= (LO) && (I) < (HI)) ==> (P) }
+#define contract_exists(I, LO, HI, P)                                                 \
+  __CPROVER_exists { unsigned long I; ((I) >= (LO) && (I) < (HI)) && (P) }
+#define contract_frees(L) __CPROVER_frees(L)
+#define contract_freeable(P) __CPROVER_is_freeable(P)
+#define contract_was_freed(P) __CPROVER_was_freed(P)
+#define contract_loop_entry(E) __CPROVER_loop_entry(E)
+#define contract_object_whole(P) __CPROVER_object_whole(P)
+#define contract_object_from(P) __CPROVER_object_from(P)
+#define contract_obeys(F, C) __CPROVER_obeys_contract((F), (C))
 
 #elif C_CONTRACTS
 
@@ -214,6 +223,14 @@
 #define contract_locations(A, B) A, B
 #define contract_invariant(P) loop_invariant(P)
 #define contract_decreases(M) decreases(M)
+#define contract_frees(L) frees(L)
+#define contract_freeable(P) freeable(P)
+#define contract_was_freed(P) was_freed(P)
+#define contract_exists(I, LO, HI, P) exists(I : LO, HI)(P)
+#define contract_loop_entry(E) loop_entry(E)
+#define contract_object_whole(P) object_whole(P)
+#define contract_object_from(P) object_from(P)
+#define contract_obeys(F, C) obeys_contract((F), (C))
 
 #elif C_CONTRACTS_STOCK
 
@@ -248,6 +265,9 @@ int __contract_writable(const void *, unsigned long);
 int __contract_fresh(const void *, unsigned long);
 int __contract_same_object(const void *, const void *);
 long __contract_pointer_offset(const void *);
+int __contract_freeable(const void *);
+int __contract_was_freed(const void *);
+int __contract_obeys(void (*)(void), void (*)(void));
 
 /* diagnose_if fires when its condition holds, so the condition is the negation
  * of the contract. #P quotes the clause as the user spelled it, before any
@@ -307,6 +327,7 @@ long __contract_pointer_offset(const void *);
  * -DC_CONTRACTS_CPROVER, so this target drops them.
  */
 #define contract_assigns(L)
+#define contract_frees(L)
 #define contract_writes_nothing()
 #define contract_locations(A, B) A, B
 
@@ -327,6 +348,9 @@ long __contract_pointer_offset(const void *);
 #define contract_same_object(P, Q) __contract_same_object((P), (Q))
 #define contract_disjoint(P, Q) (!__contract_same_object((P), (Q)))
 #define contract_pointer_offset(P) __contract_pointer_offset(P)
+#define contract_freeable(P) __contract_freeable(P)
+#define contract_was_freed(P) __contract_was_freed(P)
+#define contract_obeys(F, C) __contract_obeys((F), (C))
 #define contract_ssize_t long
 #define contract_range(P, LO, HI) (P)[(LO) : (HI)]
 
@@ -337,6 +361,7 @@ long __contract_pointer_offset(const void *);
  * target, which does have the syntax.
  */
 #define contract_forall(I, LO, HI, P) 1
+#define contract_exists(I, LO, HI, P) 1
 
 /* Loop contracts: see the note at the top of this branch. */
 #define contract_invariant(P)
@@ -354,6 +379,8 @@ long __contract_pointer_offset(const void *);
 #define contract_pre(P)
 #define contract_post(P)
 #define contract_assigns(L)
+#define contract_frees(L)
+#define contract_exists(I, LO, HI, P)
 #define contract_invariant(P)
 #define contract_decreases(M)
 

@@ -70,6 +70,17 @@ allocation, other preconditions become assumptions, and the frame is checked
 against `contract_assigns`. `solve.sh` races every installed solver and takes
 the first clean answer, because solve time varies up to 20x between backends.
 
+Modular verification: once you prove a dependency, use `-r` so callers
+trust its contract instead of re-analyzing its body:
+
+```
+$ ./prove.sh compress_bound source.c           # prove the leaf
+$ ./prove.sh compress source.c -r compress_bound  # prove the caller
+```
+
+This scales to large codebases. Each proof stays small regardless of the
+call tree below it.
+
 Needs [CBMC](https://www.cprover.org/cbmc/) 6+ (`goto-cc`,
 `goto-instrument`, `cbmc`).
 
@@ -86,6 +97,7 @@ Everything else below is shorthand for clauses or vocabulary you use inside one.
 | `contract_post (P)` | `P` holds on return |
 | `contract_returns (P)` | `P` holds on return, may name `contract_result` |
 | `contract_assigns (L)` | nothing outside `L` changes |
+| `contract_frees (L)` | nothing outside `L` is freed |
 | `contract_writes_nothing()` | the frame is empty |
 
 ### Predicates
@@ -101,7 +113,11 @@ containing a predicate; `contract_fresh(p, n)` on its own specifies nothing.
 | `contract_fresh (p, n)` | `p` is an object of exactly `n` bytes that nothing else aliases |
 | `contract_same_object (p, q)` | `p` and `q` point into one object |
 | `contract_disjoint (p, q)` | they do not |
+| `contract_freeable (p)` | `p` is a legally freeable allocation |
+| `contract_was_freed (p)` | `p` was freed during the call. `contract_post` only |
 | `contract_forall (i, lo, hi, P)` | `P` holds for every `i` in `[lo, hi)` |
+| `contract_exists (i, lo, hi, P)` | `P` holds for some `i` in `[lo, hi)` |
+| `contract_obeys (f, c)` | function pointer `f` satisfies contract `c` |
 
 ### Values
 
@@ -110,6 +126,7 @@ Things you can name inside a clause that are not true or false.
 | value | is |
 |---|---|
 | `contract_old (E)` | `E` evaluated at function entry |
+| `contract_loop_entry (E)` | `E` evaluated before the first loop iteration |
 | `contract_result` | the return value. `contract_returns` only |
 | `contract_pointer_offset (p)` | `p`'s offset within its own object |
 | `contract_ssize_t` | a signed type wide enough to hold that offset |
@@ -121,6 +138,8 @@ Memory a function is allowed to write. These go inside `contract_assigns (...)`.
 | location | is |
 |---|---|
 | `contract_range (p, lo, hi)` | elements `[lo, hi)` of `p`, half open |
+| `contract_object_whole (p)` | the entire object `p` points into |
+| `contract_object_from (p)` | from `p` to the end of its object |
 | `contract_locations (a, b)` | two locations at once; nest for three or more |
 
 A bare lvalue is also a location, so `contract_assigns (i)` says the function
