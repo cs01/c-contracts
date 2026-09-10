@@ -844,6 +844,34 @@ inside `contract_assigns`. They are now three tables, and the taxonomy at the
 top of the reference names all five kinds. Defining a category is a good way to
 find the things filed under it wrongly.
 
+### Roles are used zero times on the only real codebase
+
+Measured 2026-09-10 over the annotated zstd, excluding the vendored header:
+
+```
+contract_pointer_offset  32     contract_reads      0
+contract_invariant       17     contract_writes     0
+contract_pre             12     contract_reads_n    0
+contract_same_object      8     contract_writes_n   0
+contract_readable         3
+```
+
+Roles cost four names, a byte-versus-element trap and a reference table, and
+earn nothing so far. The reasons real annotations skip them are visible in the
+source: a size a role cannot take (`length + WILDCOPY_OVERLENGTH`), a `p != 0`
+the author did not want bundled in, or a frame stated differently.
+
+They are **not novel** either. A role is macro sugar over clauses; the only
+judgment in them is which clauses to bundle, and decision (a) in section 7 is
+the one call that mattered -- that `contract_writes` claims nothing about
+aliasing.
+
+Not deleted yet, because n=1 and the one codebase was annotated by the same
+people who wrote the header. The README now says plainly that they are sugar
+and that nobody has used them. If that is still true after a second project,
+delete them: this language's whole argument is that it is small enough to
+vendor.
+
 ### Distribution, which is the actual product question
 
 The header is the artifact people will copy. `stb`-style vendoring is the right
