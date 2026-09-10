@@ -1,0 +1,28 @@
+=== badframe
+< __CPROVER_assigns__CPROVER_object_uptop+0,1-0*sizeof*p
+< __CPROVER_assignsi,__CPROVER_object_uptop+0,1-0*sizeof*p
+> __CPROVER_assigns__CPROVER_object_uptop,1
+> __CPROVER_assignsi,__CPROVER_object_uptop,1
+=== caller
+< __CPROVER_assigns__CPROVER_object_uptodst+0,n-0*sizeof*dst
+> __CPROVER_assigns__CPROVER_object_uptodst,n
+=== enforce
+< __CPROVER_assigns__CPROVER_object_uptop+0,n-0*sizeof*p
+< __CPROVER_assignsi,__CPROVER_object_uptop+0,n-0*sizeof*p
+> __CPROVER_assigns__CPROVER_object_uptop,n
+> __CPROVER_assignsi,__CPROVER_object_uptop,n
+=== nofresh
+identical
+=== postentry
+the fork lowered nothing -- check -fc-contracts accepts this case
+=== vacuous
+identical
+=== wrongpost
+identical
+=== vocabulary
+< __CPROVER_requires__CPROVER_forall{unsignedlongi;i>=0&&i<srcSize==>src[i]!=0}
+> __CPROVER_requires__CPROVER_forall{unsignedlongi;i<srcSize==>src[i]!=0}
+< __CPROVER_assigns__CPROVER_object_uptodst+0,dstCap-0*sizeof*dst,__CPROVER_object_uptodst+0,1-0*sizeof*dst
+> __CPROVER_assigns__CPROVER_object_uptodst,dstCap,__CPROVER_object_uptodst,1
+< __CPROVER_requires__CPROVER_ssize_tn>0
+> __CPROVER_requireslongn>0
