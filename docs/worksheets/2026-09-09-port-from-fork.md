@@ -232,13 +232,30 @@ disk so it can be copied and hand-edited, and let `proofs/<fn>.proof.c` on disk
 win over the generated one. `--bound name=N` for the unbounded pointer-size
 parameters that auto-generation cannot guess.
 
-**Vacuity gate — argued for, not yet decided by the user.** `prove` must run
-each harness twice: once for real, once with `assert(0)` appended. If run 2 also
-reports SUCCESSFUL, the preconditions are contradictory and the proof is
-worthless. Without this a proof suite can go green while proving nothing, which
-is the "gate stuck at pass" failure mode. The fork has the *syntactic* check
-(`findContradictoryPrecondition`, and `test/Sema/c-contracts-harness-contradiction.c`);
-the semantic one only shows up under the solver.
+**Vacuity gate — DECIDED 2026-09-09: on by default.** `prove` runs each harness
+twice: once for real, once with `assert(0)` appended. `assert(0)` is reachable
+by construction, so run 2 *must* report FAILED; if it reports SUCCESSFUL the
+preconditions are unsatisfiable, CBMC proved nothing, and `prove` must say so
+rather than print a green line.
+
+`--no-vacuity` opts out. It is on by default because the failure it catches is
+silent and permanent: a suite that passes while proving nothing looks exactly
+like a suite that works, forever. The fork has only the *syntactic* check
+(`findContradictoryPrecondition`, `test/Sema/c-contracts-harness-contradiction.c`),
+which catches literal contradictions on one variable; the interesting ones are
+semantic (`pre(fresh(p, n))` with an `n` the harness cannot allocate) and only
+appear under the solver.
+
+Cost, so it is not a surprise: this doubles solver time, and `proofs/COST.md`
+records up to 20x between solvers on the same goto binary. Budget against e2e
+case 7, which holds a proof to 60s. If that hurts, the escape hatch to build
+next is caching the vacuity verdict per function keyed on the contract text, so
+the second run only happens when a contract changes -- not turning the gate off.
+
+**Done for the vacuity half looks like:** a fixture whose preconditions are
+semantically contradictory, on which `prove` exits non-zero and names the
+vacuity, plus a gate audit confirming that removing the check makes that same
+fixture report success.
 
 **Done looks like:** `c-contracts prove <fn> <file>` reaching VERIFICATION
 SUCCESSFUL on `test/cases/`-style fixtures, plus a differential gate: the
@@ -364,7 +381,8 @@ with `caller_ok` passing all four preconditions, `caller_alias` (`copy(a, a, 4)`
 failing precondition **.4**, the `disjoint` one, and that same caller verifying
 SUCCESSFUL once the clause is deleted.
 
-**(b) Vacuity gate in v1?** My argument for yes is in section 5.
+**(b) Vacuity gate — DECIDED 2026-09-09: on by default, `--no-vacuity` to opt
+out.** Rationale and mechanism are in section 5; this settles the default.
 
 **(c) Postconditions on the declaration — DONE 2026-09-09, for `post`.**
 
