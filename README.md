@@ -19,7 +19,7 @@ Clang warns at any call site where `b` might be zero. CBMC proves no call can
 violate it, for every possible value of `a` and `b`:
 
 ```
-$ c-contracts prove divide demo.c
+$ ./prove.sh divide demo.c
 divide: VERIFICATION SUCCESSFUL
 ```
 
@@ -46,82 +46,59 @@ a typo, all invisible until someone runs CBMC, which most projects rarely do.
 Here the fallback is `diagnose_if`, so an ordinary compile type-checks every
 clause in the function's own scope.
 
-## Three levels of checking
+## What each level catches
 
-Contracts are checked at three levels, each catching more:
+Given `void sink(int n) contract_pre (n > 0);`:
 
-| call site | compile | `check` | `prove` |
-|---|---|---|---|
-| `sink(0)` | warns | warns | proves |
-| `sink(ZERO)` (enum) | warns | warns | proves |
-| `const int n = 0; sink(n)` | warns | warns | proves |
-| `int n = 0; sink(n)` | silent | warns | proves |
-| `int n = 0; if (opaque()) n = 5; sink(n)` | silent | silent | proves |
-| `sink(opaque())` | silent | silent | proves |
+| call site | compile | prove |
+|---|---|---|
+| `sink(0)` | warns | proves |
+| `sink(ZERO)` (enum) | warns | proves |
+| `const int n = 0; sink(n)` | warns | proves |
+| `int n = 0; sink(n)` | silent | proves |
+| `int n = 0; if (opaque()) n = 5; sink(n)` | silent | proves |
+| `sink(opaque())` | silent | proves |
 
-(Given `void sink(int n) contract_pre (n > 0);`)
-
-**Compile** folds constants and warns where it can see a violation. **`check`**
-adds a dataflow pass that tracks variables across assignments, but only keeps
-facts that every path agrees on. **`prove`** hands the function to CBMC, which
-checks every possible input. Only `prove` is a guarantee.
-
-```
-$ c-contracts check <file> -- <your compile flags>
-```
-
-| flag | does |
-|---|---|
-| `--list` | print every clause, with its source location |
-| `--warnings-as-errors` | exit non-zero on any contract problem, for CI |
-
-`check` also type-checks `contract_returns (...)`, which needs the return type
-bound to a name and so cannot ride on `diagnose_if`.
+**Compile** folds constants and warns where clang can see a violation, with no
+extra tooling. **Prove** hands the function to CBMC, which checks every
+possible input. Only proving is a guarantee.
 
 ## Proving
 
+Write a harness that calls the function with nondeterministic inputs:
+
+```c
+// harness.c — includes the source, calls the function with nondeterministic inputs
+void harness(void)
+{
+  size_t n;
+  __CPROVER_assume(n > 0 && n < 64);
+  unsigned char *p = __CPROVER_allocate(n, 0);
+  zero(p, n);
+}
 ```
-$ c-contracts prove <function> <file> -- <your compile flags>
+
+Then prove it:
+
+```
+$ ./prove.sh zero harness.c -Iinclude
+lowered 4 contract clause(s)
+mode: enforce (frame checked)
+...
+VERIFICATION SUCCESSFUL
+== solved by sat in 2s
 ```
 
-Needs [CBMC](https://www.cprover.org/cbmc/) 6+. The tool preprocesses your
-source with `-DC_CONTRACTS_CPROVER` to lower the macros to CBMC's syntax, then
-runs CBMC.
-
-The entry point is generated from the preconditions, so you don't need a
-separate harness. `contract_fresh(p, n)` allocates; every other conjunct is
-assumed; a parameter no clause mentions stays nondeterministic.
-`proofs/<function>.proof.c` overrides the generated entry point where a
-project's allocation shape must be written by hand.
-
-What this does beyond running CBMC directly:
-
-- **Missing-fresh check.** `contract_writes (p, n)` with no
-  `contract_fresh (p, n)` beside it gets reported before a solver runs. Without
-  this, CBMC reports failures that are not defects.
-- **Vacuity check.** Verifies the preconditions are satisfiable. Otherwise the
-  proof is vacuous (true because nothing can satisfy the preconditions).
-- **Solver racing.** Solve time varies up to 20x between backends. Racing also
-  works around CBMC 6.11 aborting with `--z3` on some loop-contract binaries.
+Needs [CBMC](https://www.cprover.org/cbmc/) 6+ (`goto-cc`, `goto-instrument`,
+`cbmc`). `prove.sh` preprocesses with `-DC_CONTRACTS_CPROVER` to lower the
+macros to CBMC's syntax, compiles to a goto program, applies loop contracts,
+enforces the function's frame, and runs `cbmc`. `solve.sh` races every
+installed solver (MiniSat, z3, bitwuzla, cvc5) and takes the first clean
+answer, because solve time varies up to 20x between backends.
 
 One caveat: CBMC lets a loop's `contract_assigns` widen the function's frame
 inside that loop, and does not check that the loop's targets lie within the
 function's.
-
-| flag | does |
-|---|---|
-| `--mode=auto` | check the frame where possible, else fall back and say which loop has no contract |
-| `--caller=f` | verify `f` against the callee's contract, the only mode where a precondition is an obligation |
-| `--bound n=N` | cap a size the contract leaves open |
-| `--unwind=N` | unwind bound, with unwinding assertions on |
-| `--no-vacuity` | skip the vacuity check |
-| `--solver=X` | pin one solver instead of racing them |
-| `--timeout=N` | seconds per step. Default 900 |
-| `--proof-dir=D` | where `<function>.proof.c` may override the generated entry point |
-| `--cbmc-flag=X` | passed straight through to `cbmc` |
-| `--cc=X` | the preprocessor that lowers the clauses. Default `cc` |
-| `--verbose` | print what CBMC printed |
-| `--keep-work` | keep the working directory and say where it is |
 
 ## Reference
 
@@ -132,9 +109,9 @@ Everything else below is shorthand for clauses or vocabulary you use inside one.
 
 | clause | means | checked by |
 |---|---|---|
-| `contract_pre (P)` | caller must establish `P` | compile, check, prove |
+| `contract_pre (P)` | caller must establish `P` | compile, prove |
 | `contract_post (P)` | `P` holds on return | compile |
-| `contract_returns (P)` | `P` holds on return, may name `contract_result` | check, prove |
+| `contract_returns (P)` | `P` holds on return, may name `contract_result` | prove |
 | `contract_assigns (L)` | nothing outside `L` changes | prove |
 | `contract_writes_nothing()` | the frame is empty | prove |
 
@@ -249,38 +226,15 @@ The header picks one at include time.
 `-DC_CONTRACTS_STOCK=0` forces the last row, for a build that wants the
 annotations present and inert.
 
-## Build the tool
-
-Only needed for `check` or `prove`. The header requires nothing.
-
-```sh
-cmake -G Ninja -B build -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-ninja -C build
-```
+## Tests
 
 | gate | needs |
 |---|---|
 | `test/header.sh` | a C compiler |
 | `test/readme.sh` | a C compiler. Compiles this file's examples |
-| `test/run.sh` | the tool |
-| `test/prove.sh` | `cbmc` 6+ |
-| `test/differential.sh` | the reference clang fork |
-| `test/zstd.sh` | a zstd checkout |
-
-The last three skip when their prerequisite is missing.
 
 ## Status
 
-The header is done. The proving is CBMC's; what this repo adds is the header
-and the tooling around it.
-
-`prove` is the least finished part, and also the part a user gets value from,
-which is the wrong way round. It takes several files but only one function name
-per run, and cannot find the annotated functions itself. It caches nothing, so
-every run re-solves from scratch. It emits text and no report.
-
-`check` does less than the table above may suggest: it is spec hygiene, not bug
-finding.
-
-`docs/` has the working record and two clang defects this ran into, written up
-ready to file.
+The header is the project. `prove.sh` and `solve.sh` are the proving workflow.
+No build step, no compiled binary, no LLVM dependency. Copy the header, write a
+harness, run the script.
