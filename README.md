@@ -15,8 +15,16 @@ int divide(int a, int b)
 }
 ```
 
-Clang warns at any call site where `b` might be zero. CBMC proves no call can
-violate it, for every possible value of `a` and `b`:
+Clang warns at any call site where `b` might be zero:
+
+```
+$ clang -fsyntax-only demo.c
+demo.c:8:5: warning: precondition b != 0 is violated by this call
+    divide(10, 0);
+    ^
+```
+
+CBMC proves no call can violate it, for every possible value of `a` and `b`:
 
 ```
 $ ./prove.sh divide demo.c

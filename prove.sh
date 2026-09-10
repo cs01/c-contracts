@@ -36,7 +36,7 @@ case "$(uname -m)" in
   arm64|aarch64) PLATFORM_FLAGS="-U__ARM_NEON -U__ARM_FEATURE_SVE -U__ARM_FEATURE_SVE2" ;;
 esac
 # shellcheck disable=SC2086
-cc -E -DC_CONTRACTS_CPROVER $PLATFORM_FLAGS ${CPPFLAGS:-} $CFLAGS "$SRC" -o "$W/pp.i" 2>"$W/cpp.log" || {
+/usr/bin/cc -E -DC_CONTRACTS_CPROVER $PLATFORM_FLAGS ${CPPFLAGS:-} $CFLAGS "$SRC" -o "$W/pp.i" 2>"$W/cpp.log" || {
   echo "preprocessing $SRC failed:" >&2
   grep -m5 "error:" "$W/cpp.log" >&2; exit 2; }
 
