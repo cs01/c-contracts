@@ -1,7 +1,7 @@
-CASE/inplacepost.c:12:3: postcondition of 'good': p != 0 && n <= 64
-CASE/inplacepost.c:13:3: postcondition of 'good': n == old(n)
-CASE/inplacepost.c:14:3: postcondition of 'good': c_result <= n
-CASE/inplacepost.c:18:3: postcondition of 'both': nn > 0
-CASE/inplacepost.c:19:3: postcondition of 'both': c_result <= mm
-CASE/inplacepost.c:18:3: error: use of undeclared identifier 'nn'
-CASE/inplacepost.c:19:3: error: use of undeclared identifier 'mm'
+CASE/inplacepost.c:11:3: postcondition of 'good': p != 0 && n <= 64
+CASE/inplacepost.c:12:3: postcondition of 'good': n == contract_old(n)
+CASE/inplacepost.c:13:3: postcondition of 'good': contract_result <= n
+CASE/inplacepost.c:17:3: postcondition of 'both': nn > 0
+CASE/inplacepost.c:18:3: postcondition of 'both': contract_result <= mm
+CASE/inplacepost.c:17:3: error: use of undeclared identifier 'nn'
+CASE/inplacepost.c:18:3: error: use of undeclared identifier 'mm'

@@ -7,20 +7,19 @@
    own assigns widen the frame inside the loop and never checks that the loop's
    targets lie within the function's. That is worth knowing before trusting a
    frame on a function whose loops are annotated. */
-#define C_CONTRACTS_NO_PREFIX
 #include <c_contracts.h>
 
 typedef unsigned long size_t;
 
 void zero(unsigned char *p, size_t n)
-  pre     (n > 1 && n < 64)
-  pre     (fresh(p, n))
-  assigns (range(p, 0, 1))
+  contract_pre     (n > 1 && n < 64)
+  contract_pre     (contract_fresh(p, n))
+  contract_assigns (contract_range(p, 0, 1))
 {
   size_t i = 0;
   while (i < n)
-    assigns        (locations(i, range(p, 0, 1)))
-    loop_invariant (i <= n)
-    decreases      (n - i)
+    contract_assigns        (contract_locations(i, contract_range(p, 0, 1)))
+    contract_invariant (i <= n)
+    contract_decreases      (n - i)
   { p[i] = 0; i++; }
 }

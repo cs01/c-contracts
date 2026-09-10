@@ -2,7 +2,7 @@
  *
  * It is here rather than generated because the separation it assumes is a
  * property of THIS PROOF, not of the function: wildcopy's real callers hand it
- * interior pointers into one output buffer, so `fresh(dst, ...)` would be a
+ * interior pointers into one output buffer, so `contract_fresh(dst, ...)` would be a
  * false thing to write on the function itself and would oblige every caller to
  * something zstd does not do. Stating it here keeps zstd's contract saying only
  * what callers actually owe, and puts the proof's own assumption where a

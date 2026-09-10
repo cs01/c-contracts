@@ -47,9 +47,9 @@ llvm::StringRef markerPrefix(ClauseKind K) {
   case ClauseKind::Pre:
     return "";
   case ClauseKind::Post:
-    return "c_post:";
+    return "contract_post:";
   case ClauseKind::Returns:
-    return "c_returns:";
+    return "contract_returns:";
   }
   llvm_unreachable("unhandled clause kind");
 }
@@ -83,8 +83,8 @@ const Expr *contractFromViolation(const Expr *Cond) {
 
 /// The predicate as the author spelled it, recovered from the message the
 /// header quoted it into. Printing the AST back instead would name the
-/// never-defined helpers a role lowers to -- `__c_writable(((p)), ((n)))` where
-/// the source says `c_writable(p, n)` -- and a reader has to be able to find
+/// never-defined helpers a role lowers to -- `__contract_writable(((p)), ((n)))` where
+/// the source says `contract_writable(p, n)` -- and a reader has to be able to find
 /// what they are being told about in their own file.
 llvm::StringRef spellingFromMessage(llvm::StringRef Message) {
   llvm::StringRef Text = Message.drop_front(PreMessagePrefix.size());

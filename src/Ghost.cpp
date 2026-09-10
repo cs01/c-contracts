@@ -88,7 +88,7 @@ std::string parameterListText(const FunctionDecl *FD) {
 /// to C89 as a GNU extension, and unevaluated, so nothing is called.
 /// Empty for a function returning void: there is no result to bind, and a
 /// clause that names one gets clang's own "use of undeclared identifier
-/// 'c_result'" pointing at the clause, which is the right thing to say. A void
+/// 'contract_result'" pointing at the clause, which is the right thing to say. A void
 /// function can still carry a postcondition about what it wrote through a
 /// pointer, and that one has to keep working.
 std::string resultBinding(const FunctionDecl *FD) {
@@ -102,7 +102,7 @@ std::string resultBinding(const FunctionDecl *FD) {
     Call += FD->getParamDecl(I)->getNameAsString();
   }
   Call += ")";
-  return "  __typeof__(" + Call + ") c_result;\n";
+  return "  __typeof__(" + Call + ") contract_result;\n";
 }
 
 struct GhostSource {
@@ -139,7 +139,7 @@ GhostSource buildGhostSource(llvm::StringRef Original,
   // In a scope whose parameters are the entry values, `old(x)` is x. The
   // header leaves the clause quoted, so this is the first time the spelling is
   // expanded, and it is expanded to the right thing for this scope.
-  emit("#undef c_old\n#define c_old(E) (E)\n#undef old\n#define old(E) (E)\n");
+  emit("#undef contract_old\n#define contract_old(E) (E)\n#undef old\n#define old(E) (E)\n");
 
   unsigned N = 0;
   for (const Contract &C : Contracts) {
@@ -174,7 +174,7 @@ GhostSource buildGhostSource(llvm::StringRef Original,
     }
   }
 
-  emit("#undef c_old\n#undef old\n");
+  emit("#undef contract_old\n#undef old\n");
   return G;
 }
 

@@ -29,7 +29,7 @@ namespace ccontracts {
 /// project's, not this repo's, and it can be years old. Bumped in lockstep with
 /// C_CONTRACTS_VERSION in the header whenever a consumer could notice the
 /// difference.
-constexpr unsigned RequiredHeaderVersion = 1;
+constexpr unsigned RequiredHeaderVersion = 2;
 
 /// The C_CONTRACTS_VERSION \p PP saw, or 0 if the translation unit defined
 /// none -- which means either a header older than versioning, or no header.

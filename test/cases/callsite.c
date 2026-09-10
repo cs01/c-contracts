@@ -2,13 +2,12 @@
    the arguments. Clang's own diagnose_if folds only against the argument
    expressions, so everything that travels through a variable reaches nobody
    without this. Each case below says what it pins. */
-#define C_CONTRACTS_NO_PREFIX
 #include <c_contracts.h>
 
 typedef unsigned long size_t;
 
-int *allocate(size_t n) pre(n > 0);
-int *bounded(size_t n) pre(n < 10);
+int *allocate(size_t n) contract_pre(n > 0);
+int *bounded(size_t n) contract_pre(n < 10);
 int opaque(void);
 
 /* 1. The point of the pass. The violation is visible only through a variable,
@@ -72,7 +71,7 @@ void merged(int c)
 
 /* 5. The function's own preconditions seed the entry state, so a call whose
    precondition this function's caller already guaranteed stays silent. */
-void forwards(size_t n) pre(n > 0)
+void forwards(size_t n) contract_pre(n > 0)
 {
   allocate(n);
 }
@@ -84,7 +83,7 @@ void forwards(size_t n) pre(n > 0)
    exactly what allocate forbids. Case 5 is a negative test and so passes
    whether or not seeding works at all; this is the one that fails when it
    does not. */
-void forwards_split(size_t n) pre(n == 0);
+void forwards_split(size_t n) contract_pre(n == 0);
 void forwards_split(size_t n)
 {
   allocate(n);
@@ -93,7 +92,7 @@ void forwards_split(size_t n)
 /* 6. The contract is spelled on the prototype and the definition is separate,
    so the predicate names the prototype's parameters while the call resolves to
    the definition. Pins that substitution is keyed on the parameter index. */
-int scale(int k) pre(k != 0);
+int scale(int k) contract_pre(k != 0);
 int scale(int k) { return k; }
 
 void calls_scale(void)

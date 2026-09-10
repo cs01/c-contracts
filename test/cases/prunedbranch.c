@@ -5,10 +5,9 @@
    and report it. Asserting only that the tool does not crash would pass just as
    well with the pass disabled -- and the crash this pins was found on zstd,
    whose decoder is full of `if (constant)`. */
-#define C_CONTRACTS_NO_PREFIX
 #include <c_contracts.h>
 
-void sink(int n) pre (n > 0);
+void sink(int n) contract_pre (n > 0);
 
 void folded(void)
 {

@@ -31,52 +31,27 @@ check(){ if [ "$2" = 1 ]; then ok "$1"; else bad "$1" "$3"; fi }
 # should keep, or keeps one it should drop, shows up here rather than in a
 # project six months later.
 cat > "$W/sample.c" <<'EOF'
-#define C_CONTRACTS_NO_PREFIX
 #include <c_contracts.h>
 typedef unsigned long size_t;
 size_t decode(unsigned char *dst, size_t cap, const unsigned char *src, size_t n)
-  reads   (src, n)
-  writes  (dst, cap)
-  pre     (fresh(dst, cap))
-  pre     (disjoint(dst, src))
-  post    (old(cap) > 0)
-  returns (c_result <= old(cap))
-  assigns (range(dst, 0, cap));
-void nothing(int n) pre (n > 0) c_writes_nothing;
-void loops(unsigned char *p, size_t n) pre (fresh(p, n)) {
+  contract_reads   (src, n)
+  contract_writes  (dst, cap)
+  contract_pre     (contract_fresh(dst, cap))
+  contract_pre     (contract_disjoint(dst, src))
+  contract_post    (contract_old(cap) > 0)
+  contract_returns (contract_result <= contract_old(cap))
+  contract_assigns (contract_range(dst, 0, cap));
+void nothing(int n) contract_pre ((contract_ssize_t)n > 0) contract_writes_nothing;
+void quantified(const unsigned char *p, size_t n)
+  contract_pre (contract_readable(p, n))
+  contract_pre (contract_pointer_offset(p) >= 0)
+  contract_pre (contract_forall(i, 0, n, p[i] != 0));
+void loops(unsigned char *p, size_t n) contract_pre (contract_fresh(p, n)) {
   size_t i = 0;
   while (i < n)
-    assigns        (locations(i, range(p, 0, n)))
-    loop_invariant (i <= n)
-    decreases      (n - i)
-  { p[i] = 0; i++; }
-}
-EOF
-
-# The same language in the prefixed spelling, which is a SEPARATE code path:
-# the unprefixed `assigns`, `post` and `returns` are spelled out per target
-# rather than forwarding to their c_ forms, so a bug in c_assigns is invisible
-# to the file above. That gap was real until this existed.
-cat > "$W/prefixed.c" <<'EOF'
-#include <c_contracts.h>
-typedef unsigned long size_t;
-size_t decode2(unsigned char *dst, size_t cap, const unsigned char *src, size_t n)
-  c_reads   (src, n)
-  c_writes  (dst, cap)
-  c_pre     (c_fresh(dst, cap))
-  c_pre     (c_disjoint(dst, src))
-  c_pre     (c_pointer_offset(src) >= 0)
-  c_pre     (c_forall(i, 0, n, src[i] != 0))
-  c_post    (c_old(cap) > 0)
-  c_returns (c_result <= c_old(cap))
-  c_assigns (c_locations(c_range(dst, 0, cap), c_range(dst, 0, 1)));
-void nothing2(int n) c_pre ((c_ssize_t)n > 0) c_writes_nothing;
-void loops2(unsigned char *p, size_t n) c_pre (c_fresh(p, n)) {
-  size_t i = 0;
-  while (i < n)
-    c_assigns   (c_locations(i, c_range(p, 0, n)))
-    c_invariant (i <= n)
-    c_decreases (n - i)
+    contract_assigns        (contract_locations(i, contract_range(p, 0, n)))
+    contract_invariant (i <= n)
+    contract_decreases      (n - i)
   { p[i] = 0; i++; }
 }
 EOF
@@ -92,7 +67,7 @@ check "includes nothing" "$([ "${N:-1}" -eq 0 ] && echo 1 || echo 0)" \
 
 # ---------------------------------------------------------------- no variadics
 # C89 has no __VA_ARGS__. This is the promise that separates it from the
-# CONTRACT_REQUIRES(...) layers that need C99, and it is why c_locations exists
+# CONTRACT_REQUIRES(...) layers that need C99, and it is why contract_locations exists
 # instead of a variadic assigns.
 N=$(grep -c '__VA_ARGS__' "$HEADER" || true)
 check "uses no variadic macros" "$([ "${N:-1}" -eq 0 ] && echo 1 || echo 0)" \
@@ -118,7 +93,7 @@ else bad "compiles alone, c89 -pedantic -Wall -Wextra" "$(head -1 "$W/solo.log")
 # The headline promise: under a compiler that understands none of this, every
 # clause preprocesses away to the bare declaration. Nothing left to parse, and
 # nothing left needing a definition at link time.
-for f in sample prefixed; do
+for f in sample; do
   $CC -E -P -DC_CONTRACTS_STOCK=0 -I "$INCLUDE" "$W/$f.c" >> "$W/strip.i" 2>/dev/null
 done
 LEFT=$(grep -oE '__attribute__|annotate|__c_[a-z_]+|__CPROVER_[A-Za-z_]+|loop_invariant|decreases' \
@@ -128,15 +103,14 @@ check "strip target leaves the bare declaration" \
 
 if $CC -fsyntax-only -std=c89 -pedantic -Wall -Wextra -DC_CONTRACTS_STOCK=0 \
      -I "$INCLUDE" "$W/sample.c" > "$W/strip.log" 2>&1 &&
-   $CC -fsyntax-only -std=c89 -pedantic -Wall -Wextra -DC_CONTRACTS_STOCK=0 \
-     -I "$INCLUDE" "$W/prefixed.c" >> "$W/strip.log" 2>&1; then
+   true; then
   ok "strip target is clean under -pedantic -Wall -Wextra"
 else
   bad "strip target is clean under -pedantic -Wall -Wextra" "$(head -1 "$W/strip.log")"
 fi
 
 # ---------------------------------------------------------------- cprover target
-for f in sample prefixed; do
+for f in sample; do
   $CC -E -P -DC_CONTRACTS_CPROVER -I "$INCLUDE" "$W/$f.c" >> "$W/cp.i" 2>/dev/null
 done
 for want in __CPROVER_requires __CPROVER_ensures __CPROVER_assigns \
@@ -157,11 +131,11 @@ check "cprover target leaves no stock-target names" \
 # than failed elsewhere: a skip is not a pass.
 printf '#ifdef __has_attribute\n#if __has_attribute(diagnose_if)\nyes\n#endif\n#endif\n' > "$W/di.c"
 if $CC -E -P "$W/di.c" 2>/dev/null | grep -q yes; then
-  for f in sample prefixed; do
+  for f in sample; do
     $CC -E -P -I "$INCLUDE" "$W/$f.c" >> "$W/stock.i" 2>/dev/null
   done
-  for want in diagnose_if 'annotate("c_returns:' 'annotate("c_post:' \
-              __c_readable __c_writable __c_fresh __c_same_object; do
+  for want in diagnose_if 'annotate("contract_returns:' 'annotate("contract_post:' \
+              __contract_readable __contract_writable __contract_fresh __contract_same_object; do
     grep -q "$want" "$W/stock.i" || MISS2="${MISS2:-} $want"
   done
   check "stock target keeps what the tool reads" \
@@ -170,9 +144,8 @@ if $CC -E -P "$W/di.c" 2>/dev/null | grep -q yes; then
   # A precondition a released compiler can fold has to actually fire, or tier 1
   # is a claim rather than a feature.
   cat > "$W/fire.c" <<'EOF'
-#define C_CONTRACTS_NO_PREFIX
 #include <c_contracts.h>
-void sink(int n) pre (n > 0);
+void sink(int n) contract_pre (n > 0);
 void call(void) { sink(0); }
 EOF
   $CC -fsyntax-only -std=c89 -Wall -I "$INCLUDE" "$W/fire.c" > "$W/fire.log" 2>&1
@@ -182,9 +155,8 @@ EOF
 
   # And a satisfied one must not, or the check is noise.
   cat > "$W/quiet.c" <<'EOF'
-#define C_CONTRACTS_NO_PREFIX
 #include <c_contracts.h>
-void sink(int n) pre (n > 0);
+void sink(int n) contract_pre (n > 0);
 void call(void) { sink(1); }
 EOF
   $CC -fsyntax-only -std=c89 -pedantic -Wall -Wextra -I "$INCLUDE" "$W/quiet.c" \
@@ -195,19 +167,17 @@ else
   printf '  %-52s SKIP  %s\n' "stock target" "$CC has no diagnose_if"
 fi
 
-# ---------------------------------------------------------------- late aliases
-# A project whose first include came from some other header must still be able
-# to ask for the unprefixed spelling afterwards. The aliases live outside the
-# main include guard precisely so this works.
-cat > "$W/late.c" <<'EOF'
+# ---------------------------------------------------------------- double include
+# A vendored header gets included by several of a project's own headers, so
+# including it twice has to be free.
+cat > "$W/twice.c" <<'EOF'
 #include <c_contracts.h>
-#define C_CONTRACTS_NO_PREFIX
 #include <c_contracts.h>
-void g(int *p, unsigned long n) reads_n (p, n) pre (n > 0);
+void g(int *p, unsigned long n) contract_reads_n (p, n) contract_pre (n > 0);
 EOF
-if $CC -fsyntax-only -std=c89 -pedantic -I "$INCLUDE" "$W/late.c" > "$W/late.log" 2>&1
-then ok "unprefixed spelling still works on a later include"
-else bad "unprefixed spelling still works on a later include" "$(head -1 "$W/late.log")"; fi
+if $CC -fsyntax-only -std=c89 -pedantic -I "$INCLUDE" "$W/twice.c" > "$W/twice.log" 2>&1
+then ok "including it twice is harmless"
+else bad "including it twice is harmless" "$(head -1 "$W/twice.log")"; fi
 
 echo
 echo "$PASS passed, $FAIL failed"

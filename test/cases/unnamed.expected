@@ -1,2 +1,2 @@
-CASE/unnamed.c:8:31: postcondition of 'shrink': c_result > 0
-CASE/unnamed.c:8:31: error: cannot check this postcondition: no declaration of 'shrink' names its parameters
+CASE/unnamed.c:7:31: postcondition of 'shrink': contract_result > 0
+CASE/unnamed.c:7:31: error: cannot check this postcondition: no declaration of 'shrink' names its parameters

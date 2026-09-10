@@ -23,11 +23,11 @@ namespace {
 /// this tool through a diagnose_if can only name one of them.
 llvm::StringRef cproverName(llvm::StringRef Helper) {
   return llvm::StringSwitch<llvm::StringRef>(Helper)
-      .Case("__c_readable", "__CPROVER_r_ok")
-      .Case("__c_writable", "__CPROVER_w_ok")
-      .Case("__c_fresh", "__CPROVER_is_fresh")
-      .Case("__c_same_object", "__CPROVER_same_object")
-      .Case("__c_pointer_offset", "__CPROVER_POINTER_OFFSET")
+      .Case("__contract_readable", "__CPROVER_r_ok")
+      .Case("__contract_writable", "__CPROVER_w_ok")
+      .Case("__contract_fresh", "__CPROVER_is_fresh")
+      .Case("__contract_same_object", "__CPROVER_same_object")
+      .Case("__contract_pointer_offset", "__CPROVER_POINTER_OFFSET")
       .Default({});
 }
 
@@ -152,16 +152,16 @@ std::vector<MissingFresh> findWritesWithoutFresh(const Contract &C) {
       auto Naked = [&](const Expr *E) {
         return printCProver(E->IgnoreParenImpCasts(), Ctx, nullptr);
       };
-      if (const CallExpr *F = asHelperCall(Pred, "__c_fresh")) {
+      if (const CallExpr *F = asHelperCall(Pred, "__contract_fresh")) {
         Fresh.insert(Naked(F->getArg(0)));
         continue;
       }
-      for (llvm::StringRef Helper : {"__c_writable", "__c_readable"}) {
+      for (llvm::StringRef Helper : {"__contract_writable", "__contract_readable"}) {
         const CallExpr *Call = asHelperCall(Pred, Helper);
         if (!Call)
           continue;
         Claims.push_back({Naked(Call->getArg(0)), Naked(Call->getArg(1)),
-                          Cl.Text, Helper == "__c_writable", Cl.Loc});
+                          Cl.Text, Helper == "__contract_writable", Cl.Loc});
       }
     }
   }
@@ -250,7 +250,7 @@ bool emitHarness(const Contract &C, llvm::StringRef HarnessName,
     std::vector<const Expr *> Conjuncts;
     collectConjuncts(Cl.Cond, Conjuncts);
     for (const Expr *Pred : Conjuncts) {
-      const CallExpr *Call = asHelperCall(Pred, "__c_fresh");
+      const CallExpr *Call = asHelperCall(Pred, "__contract_fresh");
       const Expr *Target =
           Call ? Call->getArg(0)->IgnoreParenImpCasts() : nullptr;
       if (Target && Target->isLValue()) {
