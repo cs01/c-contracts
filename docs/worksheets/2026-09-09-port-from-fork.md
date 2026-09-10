@@ -1,11 +1,12 @@
 # Worksheet: contracts for C without a clang fork
 
-Started 2026-09-09. Status: phase 1, the tool skeleton and **B2 are done and
-committed**. All three open questions in section 7 are settled. B3 is the only
-port left.
+Started 2026-09-09. Status: **phase 1 complete**. The tool skeleton, B2 and B3
+are done and committed, all three open questions in section 7 are settled, and
+the whole thing has been run against real zstd.
 
-A fresh agent should be able to finish from this file alone. Read it, then read
-`README.md` for what the thing is, then start at "Next: B3" in section 5.
+A fresh agent should be able to pick this up from this file alone. Read it,
+then `README.md` for what the thing is. Section 5 records what B3 turned out to
+be, which is not quite what section 5 originally planned.
 
 ---
 
@@ -105,22 +106,42 @@ Header tests worth knowing about, because they are what breaks when you edit it:
 | `src/Extract.cpp` | `DiagnoseIfAttr` -> Pre, `AnnotateAttr` `"c_post:"`/`"c_returns:"` -> the rest |
 | `src/Ghost.cpp` | synthesis, reparse, diagnostic remapping. Now only needed for `returns` and the frame, since `post` is checked in place |
 | `src/CallSite.{h,cpp}` | B2, the CFG dataflow |
-| `src/main.cpp` | `--list`, `--warnings-as-errors`, exit status, and the pass wiring |
-| `test/run.sh` + 5 cases | fixture runner, `UPDATE=1` to rebless, filter arg |
+| `src/main.cpp` | subcommand dispatch, the options, exit status, pass wiring |
+| `src/CProver.{h,cpp}` | B3's port: the CBMC printer, the generated entry point, the writes-without-fresh check, the clause canonicaliser |
+| `src/Prove.{h,cpp}` | B3's pipeline: preprocess, goto-cc, goto-instrument, the solver race, vacuity, caller mode |
+| `test/run.sh` + 6 cases | fixture runner, `UPDATE=1` to rebless, filter arg |
+| `test/prove.sh` + 7 cases | the CBMC tier end to end; skips when cbmc is absent |
+| `test/differential.sh` | this lowering against the fork's, clause for clause; skips when the fork is absent |
+| `test/zstd.sh` | both tiers on real zstd; skips when the checkout is absent |
 
-Gate: **5/5 fixtures.**
+Gates: **6/6 fixtures, 7/7 proofs, differential as recorded, zstd 2/2.**
 
 ```sh
 cd ~/git/c-contracts
 cmake -G Ninja -B build -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-ninja -C build && ./test/run.sh build/c-contracts && ./tools/sync-header.sh
+ninja -C build
+./test/run.sh build/c-contracts && ./test/prove.sh build/c-contracts &&
+  ./test/differential.sh build/c-contracts && ./test/zstd.sh build/c-contracts &&
+  ./tools/sync-header.sh
 ```
+
+All four are registered with ctest, and the three with prerequisites SKIP
+loudly rather than failing: a suite that cries wolf for a missing checkout is a
+suite nobody reads.
 
 `UPDATE=1 ./test/run.sh build/c-contracts [filter]` reblesses. Read the diff
 first: a fixture changing usually means a real behaviour change, not a stale
 expectation. Two of the five (`extract`, `badpost`) were reblessed once, when
 the markers started quoting clauses exactly as written; that was an improvement,
 and it is the only time so far.
+
+**The tool needs clang's own headers and cannot find them.** It does not live
+inside an LLVM install, so it cannot derive the resource directory from argv[0]
+the way the driver does. `CMakeLists.txt` bakes in `C_CONTRACTS_RESOURCE_DIR`
+and `main.cpp` adds `-resource-dir=` to every parse. Without it a source that
+includes `<stddef.h>` parses with `size_t` unknown and every clause naming it
+collapses to a recovery expression -- silently, because the tool ignores
+clang's own diagnostics by design.
 
 Working end to end:
 
@@ -137,7 +158,7 @@ t.c:19:3:  warning: precondition n > 0 of 'allocate' is violated by this call
 | `pre` | folds at the call site | B2 catches it through a variable | `__CPROVER_requires` |
 | `post` | **type-checked in place** | ghost (redundant, kept as fallback) | `__CPROVER_ensures` |
 | `returns` | nothing | ghost type-checks it | `__CPROVER_ensures` |
-| `assigns`, loop contracts | nothing | nothing | the whole point of B3 |
+| `assigns`, loop contracts | nothing | nothing | `__CPROVER_assigns`, checked by `prove --mode=enforce` |
 
 ## 4. DONE: B2 — the call-site dataflow pass
 
@@ -235,161 +256,150 @@ is deliberately separate because it is noisier.
 variable, reported at the call site, silent when the variable's value is
 genuinely unknown. Add it as `test/cases/callsite.c` + `.expected`.
 
-## 5. Next: B3 — the CBMC emitter and `prove`
+## 5. DONE: B3 — the CBMC tier and `prove`
 
-**Everything B3 depends on is settled.** All three questions in section 7 are
-answered, the toolchain is present and was exercised end to end this session,
-and the numbers below were measured rather than assumed. Start here.
+**Landed 2026-09-09.** `c-contracts prove <fn> <file> -- <flags>` runs the whole
+level-3 pipeline. What follows is what B3 turned out to be, which is not what
+the plan above expected in three places.
 
-### The environment, verified 2026-09-09
+### The plan's biggest wrong assumption: there was almost nothing to port
 
-`cbmc`, `goto-cc` and `goto-instrument` are installed (`/opt/homebrew/bin`,
-cbmc 6.x, which is what the loop-contract handling needs). No `z3` or
-`bitwuzla`: `proofs/solve.sh` races whatever is installed, and without an SMT
-solver the symbolically-allocated harnesses take minutes rather than seconds.
+The plan listed eleven functions from the fork's 1446-line
+`clang/lib/Sema/SemaContracts.cpp` as the emitter half to port. Most of them
+have **no job out of tree**. Preprocessing the same source with
+`-DC_CONTRACTS_CPROVER` *is* the lowering: the header's own CPROVER target turns
+every clause into `__CPROVER_requires` / `__CPROVER_assigns` /
+`__CPROVER_loop_invariant`, with no compiler in the pipeline that understands
+contracts. Verified before writing a line of C++, and it is the single fact the
+rest of B3 rests on.
 
-**`proofs/verify-contract.sh` defaults `CLANG` to `../build/bin/clang`, which
-does not exist on this machine.** Pass `CLANG=$PWD/build-arm/bin/clang`. Every
-invocation below does.
+| fork function | out of tree |
+|---|---|
+| `formatCProverClause`, `printCProverContracts`, `printCProverLoopContracts`, `forEachLoopContract`, `EmitCProverUnit` | **not needed** -- macro expansion does it |
+| `CProverPrinter`, `printContractExpr` | ported (~90 lines), used **only** to print the generated entry point |
+| `emitContractHarness` | ported (~150 lines): it needs parameter *types*, so it needs the AST |
+| `findContradictoryPrecondition` | **replaced by something stronger**, see the vacuity note below |
+| `findConflictingHarnessFresh` | not ported. Known gap |
+| `recordDoWhileRewrite`, `findContinueTargetingLoop` | **cannot be ported.** See below |
 
-Also note `cc` is shadowed in this shell by something that prints `Copied:`.
-Use `/usr/bin/clang -E` explicitly when driving the preprocessor by hand;
-`verify-contract.sh` calls `cc` internally and works fine non-interactively.
+`src/CProver.cpp` (395 lines) is the port. `src/Prove.cpp` (629) is new: it is
+the pipeline, not an emitter.
 
-### The numbers B3 has to reproduce
+### The one thing only a compiler can do
 
-Measured with the real toolchain, on the simplest functions that exist:
+`goto-instrument` refuses a loop contract on a `do`/`while`. The fork's parser
+rewrites `do C { B } while (E)` into `while (1) C { B if (!(E)) break; }`
+silently, so an author annotates shipping code where it stands. Out of tree
+there is no such pass: **the source has to be restructured by hand**, and that
+was necessary to prove zstd's `ZSTD_wildcopy` (section 9). This is the only
+capability gap left between the two implementations, and it is worth stating
+plainly to anyone weighing the fork against the tool.
 
-| function | clauses | CBMC |
-|---|---|---|
-| `zero_writes` | `writes (p, n)` | 10 of 139 failed -- FAILED |
-| `zero_fresh` | `pre (fresh(p,n))` + `assigns (range(p,0,n))` | 0 of 139 -- SUCCESSFUL |
-| `copy` | `fresh` + `fresh` + `disjoint` | 0 of 139 -- SUCCESSFUL |
-
-`writes` alone does not discharge. That is settled behaviour, not a bug to fix:
-see (a) in section 7. What B3 owes the user is a *diagnostic* rather than ten
-mystery failures.
-
-### Extra work B3 owns, from decision (a)
-
-`prove` must detect the shape that cannot discharge and say so. A function with
-`writes`/`writes_n` on a pointer parameter and no `fresh` on that same pointer
-gets a diagnostic naming the missing clause, before CBMC is ever invoked.
-Without it the user sees "10 of 139 failed" and goes looking for a bug in their
-own code. This is the single highest-value thing in B3 after `prove` working at
-all.
-
-### Caller mode, which the plan did not have
-
-`--enforce-contract` verifies a function against its own contract, and there a
-precondition is an *assumption*. Preconditions only become *obligations* when
-verifying a caller, which is a different goto-instrument pass:
-
-```sh
-goto-instrument --replace-call-with-contract <callee> in.goto out.goto
-cbmc --function <caller> out.goto
-```
-
-Confirmed working this session: with `pre (disjoint(dst, src))` on `copy`, a
-caller doing `copy(a, a, 4)` fails precondition `.4` and a caller doing
-`copy(a, b, 4)` passes all four; delete the clause and the aliasing caller
-verifies clean. `prove` should expose this, because it is the only mode in
-which most preconditions are checked at all.
-
-**Source:** `~/git/llvm-contracts/clang/lib/Sema/SemaContracts.cpp`, 1446 lines.
-Only the emitter half is wanted. The named functions:
-
-| fork function | line | role |
-|---|---|---|
-| `CProverPrinter` | 154 | `PrinterHelper` that rewrites `old`/`result`/`forall` into `__CPROVER_*` |
-| `printContractExpr` | 238 | one predicate → text |
-| `formatCProverClause` | 258 | one clause → `__CPROVER_requires(...)` etc. |
-| `printCProverContracts` | 356 | a function's clauses |
-| `forEachLoopContract`, `printCProverLoopContracts` | 376, 437 | loop clauses |
-| `recordDoWhileRewrite`, `findContinueTargetingLoop` | 399, 423 | CBMC cannot take a loop contract on a `do`/`continue` shape; these rewrite it |
-| `emitContractHarness` | 667 | build a CBMC entry point from the preconditions |
-| `findContradictoryPrecondition` | 529 | the syntactic vacuity check |
-| `findConflictingHarnessFresh` | 619 | two `is_fresh` on the same buffer |
-| `Sema::EmitCProverUnit` | 803 | whole-TU rewrite, the one `prove` needs |
-
-**Do not port the checking half** (`ActOnContractClausePredicate`,
-`CheckContractPostPredicate`, `DiagnoseContractVerifiability`,
-`ActOnContractAssignsClause`, ...). Those are Sema callbacks that only exist
-because the fork has a parser. Their *checks* are worth porting later as
-standalone AST checks; their shape is not.
-
-**Big scoping decision already made, do not undo it:** frames (`assigns`) and
-loop contracts **do not travel through the stock-clang target**. They expand to
-nothing there. `prove` gets them by preprocessing the same source with
-`-DC_CONTRACTS_CPROVER`, which is what `~/git/llvm-contracts/proofs/verify-contract.sh`
-already does. The reason is in section 7 below and it is not negotiable without
-a different design.
-
-So `c-contracts prove` is, in the first instance, a wrapper around the existing
-pipeline:
+### What `prove` does
 
 ```
 preprocess with -DC_CONTRACTS_CPROVER  ->  goto-cc  ->
-goto-instrument --enforce-contract  ->  cbmc
+goto-instrument --apply-loop-contracts  ->  --enforce-contract  ->  cbmc
 ```
 
-Read `proofs/verify-contract.sh` first. It already works. The port's job is to
-make it a subcommand with a harness story, not to reinvent it.
+- **The entry point is generated from the preconditions.** `fresh(L, N)`
+  allocates, everything else is assumed, and a parameter no clause mentions is
+  left uninitialised -- nondeterministic in CBMC, which is the honest default.
+  `--bound n=N` caps a size the contract leaves open, and it is emitted *first*,
+  because a cap applied after the allocation that reads it bounds nothing.
+- **`proofs/<fn>.proof.c` wins over the generated one**, for a project whose
+  allocation shape needs saying by hand. `--proof-dir` moves it.
+- **`--mode=auto`** checks the frame where it can, and falls back to the entry
+  point when goto-instrument refuses, *saying which loop has no contract*.
+  `--mode=enforce` makes the refusal an error and lists the loops.
+- **`--caller=f`** verifies `f` against the callee's contract. This is the only
+  mode in which a precondition is an obligation rather than an assumption, and
+  therefore the only one in which `disjoint` does anything. The decisive
+  experiment from section 7(a) is now `test/prove/caller.c`: `caller_alias`
+  FAILED, `caller_ok` SUCCESSFUL, and deleting the clause makes the two agree.
+- **The writes-without-fresh diagnostic** fires before a solver runs, naming
+  both the pointer and the size to put in the missing clause. It found its
+  target on real code the first time: zstd's `ZSTD_execSequence`.
 
-**Harness policy** (decided, per the user's "not sure" + my recommendation):
-auto-generate from the preconditions by default, write the generated driver to
-disk so it can be copied and hand-edited, and let `proofs/<fn>.proof.c` on disk
-win over the generated one. `--bound name=N` for the unbounded pointer-size
-parameters that auto-generation cannot guess.
+### Vacuity: the probe is better than the plan's design
 
-**Vacuity gate — DECIDED 2026-09-09: on by default.** `prove` runs each harness
-twice: once for real, once with `assert(0)` appended. `assert(0)` is reachable
-by construction, so run 2 *must* report FAILED; if it reports SUCCESSFUL the
-preconditions are unsatisfiable, CBMC proved nothing, and `prove` must say so
-rather than print a green line.
+The plan said to run each harness twice, the second time with `assert(0)`
+appended, and budgeted for doubled solver time. **Don't append; probe.** The
+implementation runs the allocations and assumptions and then asserts false
+*instead of* calling the function:
 
-`--no-vacuity` opts out. It is on by default because the failure it catches is
-silent and permanent: a suite that passes while proving nothing looks exactly
-like a suite that works, forever. The fork has only the *syntactic* check
-(`findContradictoryPrecondition`, `test/Sema/c-contracts-harness-contradiction.c`),
-which catches literal contradictions on one variable; the interesting ones are
-semantic (`pre(fresh(p, n))` with an `n` the harness cannot allocate) and only
-appear under the solver.
+- it is nearly free, because it never runs the function body, so the cost the
+  plan budgeted for does not exist and the caching escape hatch is unnecessary;
+- appending after the call would also require the call to *return*, so a
+  function that cannot terminate under its own contract would be reported as
+  vacuous -- a wrong answer to a question about the preconditions alone.
 
-Cost, so it is not a surprise: this doubles solver time, and `proofs/zstd/COST.md`
-records up to 20x between solvers on the same goto binary. Budget against e2e
-case 7, which holds a proof to 60s. If that hurts, the escape hatch to build
-next is caching the vacuity verdict per function keyed on the contract text, so
-the second run only happens when a contract changes -- not turning the gate off.
+It subsumes the fork's syntactic `findContradictoryPrecondition`, which only
+catches literal contradictions on one variable. Gate-audited: `--no-vacuity` on
+`test/prove/vacuous.c` reports VERIFICATION SUCCESSFUL, which is exactly the
+silent-forever failure the gate exists to stop.
 
-**Done for the vacuity half looks like:** a fixture whose preconditions are
-semantically contradictory, on which `prove` exits non-zero and names the
-vacuity, plus a gate audit confirming that removing the check makes that same
-fixture report success.
+### The solver: race, do not choose
 
-**Done looks like:** `c-contracts prove <fn> <file>` reaching VERIFICATION
-SUCCESSFUL on `test/cases/`-style fixtures, plus a differential gate: the
-emitted CBMC text matches the fork's `-fcontract-emit-cprover-unit` byte for
-byte on the fork's existing lit fixtures. That differential is the whole reason
-the fork is still alive; build it early, not last.
+The plan's first design picked a solver from the shape of the harness, since
+this tool generates it and therefore knows whether the extents stay symbolic.
+**That is wrong, and the first real run proved it:** cbmc 6.11 with `--z3`
+aborts with an invariant violation on the loop-contract binaries here. A tool
+that picked one solver would report a crash where the other has a proof. So
+`prove` races them, on solve.sh's rules: rc 10 is definitive, rc 0 only if no
+property is UNKNOWN, anything else keeps waiting.
 
-**Suggested order**, smallest provable step first:
+### A bug the fixed capture files hid, worth not repeating
 
-1. `prove` as a thin wrapper over `verify-contract.sh`'s existing pipeline, one
-   function, one file, no harness generation. It already works; make it a
-   subcommand.
-2. The differential gate against `-fcontract-emit-cprover-unit`. Cheap once (1)
-   exists, and it is what stops the emitter drifting.
-3. The `writes`-without-`fresh` diagnostic. Highest user value per line.
-4. Harness generation from preconditions, with `proofs/<fn>.proof.c` on disk
-   winning over the generated one.
-5. The vacuity gate.
-6. Caller mode (`--replace-call-with-contract`).
+Every step originally wrote to one `stdout.tmp`. When the z3 run crashed and
+wrote nothing, the tool read the *previous* step's file and reported its
+verdict. A crash that looks like an answer is the worst thing this tool could
+do. Each step now has its own capture files, removed before the run.
 
-**Budget it.** CBMC runs are minutes, and the vacuity gate doubles that. Do not
-put a full proof in `test/run.sh`, which is a fast fixture runner -- proofs need
-their own target with their own timeout, and e2e case 7 in the fork holds a
-proof to 60s as the reference for what is affordable.
+### CBMC checks every assertion in the binary, not only the reachable ones
+
+The vacuity probe cannot live in the same translation unit as the proof: with
+`--function f`, CBMC still reports the `assert(0)` in an unreachable
+`__contract_vacuity_f`, and every proof built from that binary FAILS. The two
+are compiled apart. This cost an hour of looking for a bug in the frame check
+that was not there.
+
+### The differential gate, and what it found
+
+`test/differential.sh` lowers each case both ways -- macro expansion here,
+`-fcontract-emit-cprover-unit` in the fork -- and compares the clauses through
+one canonicaliser (`c-contracts clauses`, whitespace and parentheses removed).
+**Byte-for-byte, as the plan hoped, is not true.** The differences are recorded
+in `test/differential.expected` rather than normalised away, so a *new* drift
+and a recorded one disappearing both fail:
+
+1. `c_range(p, 0, n)` emits `object_upto((p) + (0), ((n) - (0)) * sizeof(*(p)))`
+   where the fork simplifies to `object_upto(p, n)`; `c_forall` likewise emits a
+   redundant `i >= 0`. A macro cannot test whether its argument is literally
+   zero. Cost, not meaning, and goto-cc folds it.
+2. The fork **rejects** `returns (c_result > n)` for a by-value parameter and
+   demands `old(n)`. Measured here: CBMC reads such a parameter in an `ensures`
+   at its *entry* value, so the two spellings verify identically and the fork is
+   stricter rather than righter. `test/prove/postentry.c` pins the behaviour.
+
+**Gate-audited, and it failed the first audit.** Swapping `w_ok` for `r_ok`
+inside `c_writable` passed cleanly, because no proof fixture used the predicate
+layer -- the roles reach CBMC through `c_writes`, not through `c_writable`.
+`test/differential/vocabulary.c` puts every spelling on one declaration; the
+gate now fires on that swap and on two more.
+
+### Still not done
+
+- `findConflictingHarnessFresh` (two `fresh` clauses on one buffer with
+  different sizes) is not ported.
+- The fork's *checking* half is still unported, and the differential gate has
+  now identified the first thing worth taking from it: the `post` rule that a
+  by-value parameter must be named through `old()`.
+- **A loop's `assigns` silently widens the function's frame.** Narrowing only
+  the function's clause on `test/prove/enforce.c` still verifies, because CBMC
+  grants the loop's own targets inside the loop and never checks that they lie
+  within the function's. `test/prove/badframe.c` narrows both and fails, which
+  is what pins the frame gate; the containment check is nobody's yet.
 
 ## 6. Gotchas already paid for
 
@@ -439,6 +449,32 @@ proof to 60s as the reference for what is affordable.
   broken for the ordinary prototype-plus-definition layout. Any feature whose
   success looks like "no output" needs a case where the feature's absence
   *produces* output.
+- **`pre (p != NULL)` does not compile.** `NULL` is `((void *)0)`, and a cast to
+  a pointer is not a constant expression in C's evaluator, so `diagnose_if`
+  rejects it: "attribute expression never produces a constant expression".
+  `pre (p != 0)` is fine, `pre (!p)` is fine, and C++ accepts all of them. This
+  is the first thing a real project hits -- zstd's `ZSTD_execSequence` hit it on
+  the first build. Nothing in the header can work around it, because the clause
+  reaches `diagnose_if` exactly as the author wrote it. Written up ready to file
+  in `docs/clang-diagnose_if-null-constant.md`.
+- **`writes_nothing`, `c_result`, `c_ssize_t` and `c_ghost` have no unprefixed
+  spelling**, deliberately: they are object-like and would rewrite every bare
+  occurrence of a common word. `void f(int n) pre (n > 0) writes_nothing {}`
+  fails with "expected function body after function declarator", which points at
+  the macro and says nothing about why. Write `c_writes_nothing`.
+- **The tool swallows clang's own diagnostics**, so a source that does not parse
+  reports as a source with no contracts. `prove` now says so explicitly when the
+  translation unit had errors; anything else added here should too.
+- **`llvm::ReversePostOrderTraversal<CFG *>` dereferences null.** `if (0)`,
+  `while (0)` and `if (1) ... else ...` leave the pruned edge in the CFG with no
+  block behind it, and `po_iterator` walks into it looking for grandchildren.
+  This segfaulted the call-site pass on the first zstd translation unit it was
+  pointed at. `CallSite.cpp` now computes the order itself, skipping nulls;
+  `test/cases/prunedbranch.c` pins it *positively* -- the pass must still reach
+  and report the call after the pruned branches.
+- **CBMC checks every assertion in the goto binary**, not only those its
+  `--function` entry point can reach. Anything that deliberately asserts false
+  needs its own translation unit.
 - **Write the gate, then break it on purpose and watch it fail.** Every gate
   added this session was audited that way, and two of them did not fail on the
   first attempt: a loop fixture with a literal bound made the broken pass drop
@@ -619,3 +655,74 @@ test fails.
 
 That leaves only *GCC's own preprocessor and parser* unverified, rather than the
 header's behaviour on that branch.
+
+**No `bitwuzla` or `cvc5` on this machine.** The solver race runs `sat` and `z3`
+here; the other two branches are code nobody has executed.
+
+## 9. Against real zstd
+
+Everything above is fixtures. This section is the tool pointed at a codebase
+that was not written for it: `~/git/zstd`, branch `contracts-annotations`
+(`cs01/zstd`), whose decoder carries the portable annotations.
+
+`test/zstd.sh` is the gate, and it SKIPs when the checkout is absent.
+
+**What had to be fixed before it worked at all**, in order:
+
+1. zstd's vendored `lib/common/c_contracts.h` was 268 lines and predated the
+   whole stock-clang target. Re-vendored from `include/c_contracts.h`.
+2. `pre (op != NULL)` did not compile. See section 6.
+3. The call-site pass segfaulted on the first translation unit. See section 6.
+4. `goto-cc` cannot parse Homebrew clang's `arm_vector_types.h`, which zstd
+   reaches through `compiler.h` -> `arm_neon.h`. The project passes
+   `-U__ARM_NEON -DZSTD_NO_INTRINSICS`, exactly as the fork's harnesses do.
+
+**What it then found.** The first `prove` run of `ZSTD_wildcopy` reported
+undefined behaviour, independently rediscovering the fork's
+`FINDING-wildcopy-pointer-subtract.md`:
+
+```c
+ptrdiff_t diff = (BYTE*)dst - (const BYTE*)src;   /* before the branch */
+```
+
+Subtracting two pointers is defined only within one object, and that is exactly
+the overlap case -- so this is undefined for every no-overlap caller, which is
+all of the hot ones. Moved into the `&&` that already tests for overlap, where
+it short-circuits.
+
+**The result.** With the fix, and with loop contracts added to wildcopy's two
+loops in the portable spelling (both `do` loops rewritten to `while (1)` by
+hand, since nothing out of tree can do it for us):
+
+```
+  1 reads a real translation unit              PASS   10 clauses read out of a stock parse
+  2 ZSTD_wildcopy is memory safe, unbounded    PASS   2s, budget 60s
+```
+
+Unbounded: the buffers are symbolically sized and the loop contracts discharge
+the loops, so there is no `--unwind` and no cap on `length`. Two seconds against
+the fork's 60s CI budget from e2e case 7.
+
+**Gate-audited, four ways.** Allocating two bytes less than
+`length + WILDCOPY_OVERLENGTH` FAILS; allocating `length` FAILS; removing the
+loop contracts and relying on `--unwind` FAILS its unwinding assertion once the
+length cap is lifted; and one byte short still passes -- `WILDCOPY_OVERLENGTH`
+has exactly one byte of margin over what wildcopy touches, which is a fact about
+zstd rather than about the gate.
+
+**zstd itself is unharmed.** `libzstd.a` and the CLI build, round-trips at
+levels 1/3/9/19 match, and `tests/fuzzer` completed 8540 tests clean.
+
+**Where the proof's assumptions live.** `test/zstd/proofs/ZSTD_wildcopy.proof.c`
+is hand written on purpose. The separation it assumes belongs to the *proof*,
+not to the function: wildcopy's real callers hand it interior pointers into one
+output buffer, so `fresh(dst, ...)` on the function itself would be false and
+would oblige every caller to something zstd does not do. Keeping it in the proof
+file leaves zstd's contract saying only what callers actually owe.
+
+**`ZSTD_execSequence` does not converge.** 180s with both solvers, no verdict.
+It is the hardest function in the set -- COST.md says so, and the fork needed
+`--object-bits 12` and a much more careful harness. The generated entry point
+also cannot allocate for it, because the contract has `readable(*litPtr, ...)`
+with no `fresh`, which is precisely what the writes-without-fresh diagnostic
+says when you run it.

@@ -96,6 +96,57 @@ ninja -C build
 test/run.sh build/c-contracts
 ```
 
+## Proving it
+
+`c-contracts prove` is the third tier: not "is this contract well formed" and
+not "does this caller break it", but "is it true for every input". CBMC answers
+that, and nothing in the pipeline understands contracts -- preprocessing the
+same source with `-DC_CONTRACTS_CPROVER` is the whole lowering.
+
+```
+$ c-contracts prove zero demo.c -- -std=c89 -Iinclude
+lowered 6 clause(s):
+  __CPROVER_requires(n > 0 && n < 64)
+  __CPROVER_requires(__CPROVER_is_fresh((p), (n)))
+  __CPROVER_assigns(__CPROVER_object_upto((p) + (0), ((n) - (0)) * sizeof(*(p))))
+  ...
+mode: enforce (frame checked)
+vacuity: zero's preconditions are satisfiable
+solved by sat
+zero: VERIFICATION SUCCESSFUL
+```
+
+The entry point is generated from the preconditions -- `fresh(p, n)` allocates,
+everything else is assumed -- so there is no hand-written `__CPROVER_assume`
+encoding a claim nobody reviews. `proofs/<function>.proof.c` on disk wins over
+the generated one where a project's allocation shape needs saying by hand.
+
+Four things it does that a shell script around CBMC does not:
+
+- **It names the shape that cannot discharge.** `writes (p, n)` with no
+  `fresh (p, n)` beside it produces a warning naming the missing clause, before
+  a solver runs. Without it the user sees ten failures and goes looking for a
+  bug in their own code.
+- **It checks that the preconditions are satisfiable at all**, by running the
+  same assumptions with `assert(0)` after them: reachable by construction, so a
+  clean run means nothing can call the function and the proof proved nothing.
+  On by default; `--no-vacuity` opts out. It is cheap -- the probe stops before
+  the call, so it never runs the function body.
+- **It races the solvers** rather than picking one. COST.md in the reference
+  tree measures up to 20x between CBMC's built-in SAT backend and an SMT solver,
+  in *either* direction, and cbmc 6.11 with `--z3` aborts outright on some
+  loop-contract binaries -- so a tool that picked one would report a crash where
+  the other has a proof.
+- **It has a caller mode.** `--caller=f` verifies `f` against the callee's
+  contract, which is the only mode in which a precondition is an *obligation*
+  rather than an assumption. `pre (disjoint(dst, src))` is invisible until then.
+
+`--mode=auto` (the default) checks the frame where it can and falls back to the
+generated entry point when a loop in the function carries no contract, saying
+which. One caveat worth knowing before trusting a frame: CBMC lets a loop's own
+`assigns` widen the function's frame inside that loop, and does not check that
+the loop's targets lie within the function's.
+
 ## Status
 
 Working: clause extraction, postcondition type checking, call-site precondition
@@ -110,14 +161,40 @@ $ c-contracts check demo.c -- -std=c89 -Iinclude
 demo.c:19:3: warning: precondition n > 0 of 'allocate' is violated by this call
 ```
 
-Not yet ported from the reference implementation: the CBMC emitter behind
-`c-contracts prove`.
+`c-contracts prove` is in, and runs on real code. Against zstd's decoder it
+reads the contracts out of an ordinary parse and proves `ZSTD_wildcopy`
+memory-safe for *every* length in two seconds -- and found undefined behaviour
+in it on the first run: `(BYTE*)dst - (const BYTE*)src` computed before the
+branch that is the only case where the two pointers are in the same object.
+
+## Gates
+
+| gate | what it holds | prerequisite |
+|---|---|---|
+| `test/run.sh` | clause extraction, ghost checking, the call-site pass | none |
+| `test/prove.sh` | the CBMC tier, end to end, including the frame and vacuity gates | `cbmc` 6+ |
+| `test/differential.sh` | this tool's lowering against the fork's, clause for clause | the fork, built |
+| `test/zstd.sh` | both tiers on a codebase not written for them | a zstd checkout |
+
+Each skips loudly rather than failing when its prerequisite is missing: a suite
+that cries wolf for reasons that have nothing to do with the code is a suite
+nobody reads.
 
 The reference implementation is a clang fork that parses all of this as real
 grammar. It is not shipped and not required; it exists as the differential
 oracle this tool is checked against.
 
-`docs/worksheets/2026-09-09-port-from-fork.md` is the working plan: what is
-done, what the remaining port needs, the gotchas already paid for, and the
-decisions behind the surface language. It is written so someone can finish from
-it without this conversation.
+`docs/worksheets/2026-09-09-port-from-fork.md` is the working record: what was
+built, what the gates hold, the gotchas already paid for, and the decisions
+behind the surface language.
+
+## Known clang defects this ran into
+
+Both are in `docs/`, written up ready to file, and both shape the header:
+
+- a statement expression inside a late-parsed attribute argument segfaults the
+  parser, which is why `returns` cannot be checked in place like `post`
+  (`clang-diagnose_if-stmtexpr-crash.md`);
+- `diagnose_if(p != NULL)` is rejected where `diagnose_if(p != 0)` is accepted,
+  so a precondition has to spell the null pointer `0`
+  (`clang-diagnose_if-null-constant.md`).
