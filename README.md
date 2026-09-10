@@ -15,8 +15,10 @@ void zero(unsigned char *p, size_t n)
 
 ```
 $ c-contracts prove zero demo.c -- -Iinclude
+lowered 6 clause(s):
+  ...
 mode: enforce (frame checked)
-vacuity: zero's preconditions are satisfiable
+solved by sat
 zero: VERIFICATION SUCCESSFUL
 ```
 
@@ -118,10 +120,10 @@ After the parameter list, before the `;` or the `{`. They stack.
 
 | clause | means | checked by |
 |---|---|---|
-| `pre (P)` | caller must establish `P` | compiler, tool, CBMC |
-| `post (P)` | `P` holds on return | compiler |
-| `returns (P)` | `P` holds on return, may name `contract_result` | tool, CBMC |
-| `assigns (L)` | nothing outside `L` changes | CBMC |
+| `contract_pre (P)` | caller must establish `P` | compiler, tool, CBMC |
+| `contract_post (P)` | `P` holds on return | compiler |
+| `contract_returns (P)` | `P` holds on return, may name `contract_result` | tool, CBMC |
+| `contract_assigns (L)` | nothing outside `L` changes | CBMC |
 | `contract_writes_nothing` | the frame is empty | CBMC |
 
 ### Roles
@@ -131,28 +133,28 @@ What a function does to a buffer. Counts are **bytes**; `_n` forms count
 
 | role | expands to |
 |---|---|
-| `reads (p, n)` | `pre (p != 0)`, `pre (readable(p, n))` |
-| `writes (p, n)` | `pre (p != 0)`, `pre (writable(p, n))`, `assigns (((char *)p)[0 : n])` |
-| `reads_n (p, n)` | as `reads`, over `n * sizeof(*p)` bytes |
-| `writes_n (p, n)` | as `writes`, over `n * sizeof(*p)` bytes |
+| `contract_reads (p, n)` | `contract_pre (p != 0)`, `contract_pre (contract_readable(p, n))` |
+| `contract_writes (p, n)` | `contract_pre (p != 0)`, `contract_pre (contract_writable(p, n))`, `contract_assigns (((char *)p)[0 : n])` |
+| `contract_reads_n (p, n)` | as `contract_reads`, over `n * sizeof(*p)` bytes |
+| `contract_writes_n (p, n)` | as `contract_writes`, over `n * sizeof(*p)` bytes |
 
-Two roles, not three. A function that reads then writes carries both. `reads` is
+Two roles, not three. A function that reads then writes carries both. `contract_reads` is
 what says the caller must have initialized the memory.
 
 ### Predicates
 
 | predicate | means |
 |---|---|
-| `readable (p, n)` | `n` bytes at `p` may be read |
-| `writable (p, n)` | `n` bytes at `p` may be written |
-| `fresh (p, n)` | an object of exactly `n` bytes that nothing else visible aliases |
-| `same_object (p, q)` | `p` and `q` point into one object |
-| `disjoint (p, q)` | they do not |
-| `pointer_offset (p)` | `p`'s offset within its object |
-| `old (E)` | `E` at function entry |
+| `contract_readable (p, n)` | `n` bytes at `p` may be read |
+| `contract_writable (p, n)` | `n` bytes at `p` may be written |
+| `contract_fresh (p, n)` | an object of exactly `n` bytes that nothing else visible aliases |
+| `contract_same_object (p, q)` | `p` and `q` point into one object |
+| `contract_disjoint (p, q)` | they do not |
+| `contract_pointer_offset (p)` | `p`'s offset within its object |
+| `contract_old (E)` | `E` at function entry |
 | `contract_result` | the return value; `returns` only |
-| `range (p, lo, hi)` | elements `[lo, hi)` of `p`, for a frame |
-| `locations (a, b)` | two frame locations; nests for more |
+| `contract_range (p, lo, hi)` | elements `[lo, hi)` of `p`, for a frame |
+| `contract_locations (a, b)` | two frame locations; nests for more |
 | `contract_forall (i, lo, hi, P)` | `P` for every `i` in `[lo, hi)` |
 | `contract_ssize_t` | signed, wide enough for a pointer offset |
 
@@ -163,9 +165,9 @@ instead of unwinding it, which is what makes a proof unbounded.
 
 ```c
 while (i < n)
-  assigns        (locations(i, range(p, 0, n)))
-  loop_invariant (i <= n)
-  decreases      (n - i)
+  contract_assigns   (contract_locations(i, contract_range(p, 0, n)))
+  contract_invariant (i <= n)
+  contract_decreases (n - i)
 { p[i] = 0; i++; }
 ```
 
@@ -178,16 +180,16 @@ BYTE* const opStart contract_ghost = op;
 
 ## Things that will bite you
 
-- **Write `0`, not `NULL`.** `pre (p != NULL)` does not compile. `NULL` is
+- **Write `0`, not `NULL`.** `contract_pre (p != NULL)` does not compile. `NULL` is
   `((void *)0)` and a cast to a pointer is not a constant expression in C, so
-  the attribute is rejected. `pre (p != 0)` and `pre (!p)` are fine.
+  the attribute is rejected. `contract_pre (p != 0)` and `contract_pre (!p)` are fine.
 - **One spelling, always prefixed.** A vendored header may not take words as
   common as `pre`, `range` or `result` out of a project's namespace, and an
   opt-in second spelling only moves that decision to whoever includes the file
   first.
-- **`writes` says nothing about aliasing.** Two roles on one call may name the
-  same buffer. Say `pre (disjoint(a, b))` or `pre (fresh(p, n))` if you mean it.
-  It is not decorative: `writes` alone will not discharge a proof of even the
+- **`contract_writes` says nothing about aliasing.** Two roles on one call may name the
+  same buffer. Say `contract_pre (contract_disjoint(a, b))` or `contract_pre (contract_fresh(p, n))` if you mean it.
+  It is not decorative: `contract_writes` alone will not discharge a proof of even the
   simplest buffer-writing function.
 
 ## Targets
