@@ -5,6 +5,30 @@ declaration, your compiler type-checks them, and CBMC proves them for every
 input.
 
 ```c
+#include "c_contracts.h"
+
+int divide(int a, int b)
+  contract_pre (b != 0)
+{
+  return a / b;
+}
+```
+
+The clause goes on the declaration. Clang type-checks it at every call site via
+`diagnose_if`; CBMC proves it for every input. GCC, MSVC and tcc preprocess it
+away to the bare declaration.
+
+```
+$ c-contracts prove divide demo.c
+divide: VERIFICATION SUCCESSFUL
+```
+
+That is a proof, not a test. What this project adds: the same file stays
+ordinary C.
+
+A fuller example, with memory, loops, and a frame:
+
+```c
 #include <stddef.h>
 #include "c_contracts.h"
 
@@ -22,19 +46,11 @@ void zero(unsigned char *p, size_t n)
 }
 ```
 
-```
-$ c-contracts prove zero demo.c -- -Iinclude
-lowered 6 clause(s):
-  ...
-mode: enforce (frame checked)
-solved by sat
-zero: VERIFICATION SUCCESSFUL
-```
-
-That is a proof, not a test: it holds for every `p` and every `n` the
-preconditions allow. CBMC does the proving. What this project adds is that the
-same file is still ordinary C. GCC, MSVC and tcc preprocess every clause away to
-the bare declaration; clang goes further and type-checks them via `diagnose_if`.
+`contract_fresh(p, n)` says `p` is an object of exactly `n` bytes that nothing
+else aliases. `contract_assigns` names what the function may write.
+`contract_invariant` and `contract_decreases` let CBMC prove the loop by
+induction rather than unwinding it, so the proof holds for every `n`, not up to
+a bound.
 
 ```sh
 curl -O https://raw.githubusercontent.com/cs01/c-contracts/main/include/c_contracts.h
@@ -53,7 +69,7 @@ and defines `C_CONTRACTS_VERSION` so you can tell which copy you have:
 than silently finding fewer clauses.
 
 Against zstd's decoder this proves `ZSTD_wildcopy` memory-safe for every length
-in two seconds, and found undefined behaviour on the first run: `(BYTE*)dst -
+in two seconds, and on its first run found undefined behaviour: `(BYTE*)dst -
 (const BYTE*)src` computed before the branch that guards the only case where
 both pointers are in the same object.
 
@@ -66,8 +82,8 @@ them." This is that layer as one vendorable file.
 
 The problem with those wrappers is that they expand to **nothing** outside a CBMC
 build. The spec becomes unparsed text between proof runs. A renamed field, a
-stale bound, a typo: all invisible until someone runs CBMC, which for most
-projects is rarely. Here the `#else` branch is `diagnose_if`, so an ordinary
+stale bound, a typo: all invisible until someone runs CBMC, which most projects
+rarely do. Here the `#else` branch is `diagnose_if`, so an ordinary
 compile type-checks every clause in the function's own scope.
 
 That is what tier 1 is for. Spec hygiene, not bug finding.
@@ -88,7 +104,7 @@ and `opaque()` an extern function.
 | `sink(opaque())` | silent | silent | proves |
 
 The compiler folds constants. `check` adds an intra-procedural dataflow pass, so
-it sees through a variable but only keeps facts every path agrees on. Neither is
+it sees through a variable but only keeps facts that every path agrees on. Neither is
 a solver. Only the last column is a guarantee.
 
 ```
@@ -114,11 +130,10 @@ with `-DC_CONTRACTS_CPROVER` is the whole lowering, and the rest is `goto-cc`,
 `goto-instrument` and `cbmc`.
 
 The entry point is generated from the preconditions, so you don't need a separate
-harness full of hand-written `__CPROVER_assume` that nothing keeps in step with
-the function. `contract_fresh(p, n)` allocates; every other conjunct is assumed;
+harness full of hand-written `__CPROVER_assume` that drifts from the actual function. `contract_fresh(p, n)` allocates; every other conjunct is assumed;
 a parameter no clause mentions stays nondeterministic.
-`proofs/<function>.proof.c` overrides it where a project's allocation shape has
-to be said by hand.
+`proofs/<function>.proof.c` overrides it where a project's allocation shape must
+be written by hand.
 
 | flag | does |
 |---|---|
@@ -141,8 +156,8 @@ Three things it does that a shell script around CBMC does not:
   reported before a solver runs, naming the pointer and the size. Without this
   CBMC reports ten failures that are not defects.
 - The preconditions are checked for satisfiability by running the same
-  assumptions and asserting false. A clean run means nothing can call the
-  function and the proof proved nothing.
+  assumptions and asserting false. A clean run means no input satisfies the
+  preconditions and the proof is vacuous.
 - The solvers race. CBMC 6.11 with `--z3` aborts on some loop-contract binaries,
   and solve time varies up to 20x between backends in either direction.
 
@@ -203,7 +218,7 @@ Two roles, not three. A function that reads then writes carries both.
 ### Predicates
 
 A predicate is true or false and goes inside a clause. It is the vocabulary for
-talking about memory, which C has no way to say.
+talking about memory, which C has no syntax for.
 `contract_pre (contract_fresh(p, n))` is a clause containing a predicate;
 `contract_fresh(p, n)` on its own specifies nothing.
 
@@ -323,8 +338,8 @@ The header is done, and it is what this repo adds: the proving is CBMC's.
 from, which is the wrong way round. It takes several files but only one function
 name per run, and cannot find the annotated functions itself. It caches nothing,
 so every run re-solves from scratch. It emits text and no report. Its generated
-entry point discharges all seven proof fixtures and the one real zstd function
-needed a hand-written one instead.
+entry point discharges all seven proof fixtures, but the one real zstd function
+needed a hand-written entry point.
 
 `check` is in, and does less than the tier table above may suggest: it is spec
 hygiene, not bug finding.
