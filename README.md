@@ -127,9 +127,20 @@ targets lie within the function's.
 
 ## Reference
 
+Five kinds of thing, and they are not interchangeable:
+
+- a **clause** is a specification, and goes on a function or a loop;
+- a **role** is one word that expands to several clauses;
+- a **predicate** is true or false, and goes *inside* a clause;
+- a **value** is something you can name inside a clause, like `contract_old(n)`;
+- a **frame location** is memory a function may write, and goes inside
+  `contract_assigns` only.
+
 ### Clauses
 
-After the parameter list, before the `;` or the `{`. They stack.
+**A clause is the specification itself.** It goes after the parameter list,
+before the `;` or the `{`, and they stack. Everything else in this reference is
+either shorthand for clauses or vocabulary used inside one.
 
 | clause | means | checked by |
 |---|---|---|
@@ -137,11 +148,13 @@ After the parameter list, before the `;` or the `{`. They stack.
 | `contract_post (P)` | `P` holds on return | compiler |
 | `contract_returns (P)` | `P` holds on return, may name `contract_result` | tool, CBMC |
 | `contract_assigns (L)` | nothing outside `L` changes | CBMC |
-| `contract_writes_nothing` | the frame is empty | CBMC |
+| `contract_writes_nothing()` | the frame is empty | CBMC |
 
 ### Roles
 
-What a function does to a buffer.
+**A role is one word that expands to several clauses.** Buffer parameters want
+the same two or three clauses almost every time, so these say it once. Anything
+a role can say, you can also write out by hand.
 
 **Watch the units.** `contract_reads`/`contract_writes` count **bytes**, like
 `memcpy`. The `_n` forms count **elements** of a typed pointer.
@@ -159,25 +172,56 @@ what says the caller must have initialized the memory.
 
 ### Predicates
 
-| predicate | means |
+**A predicate is true or false, and goes inside a clause.** It is the vocabulary
+for talking about memory, which C has no way to say.
+`contract_pre (contract_fresh(p, n))` is a clause containing a predicate;
+`contract_fresh(p, n)` on its own specifies nothing.
+
+| predicate | true when |
 |---|---|
 | `contract_readable (p, n)` | `n` bytes at `p` may be read |
 | `contract_writable (p, n)` | `n` bytes at `p` may be written |
-| `contract_fresh (p, n)` | an object of exactly `n` bytes that nothing else visible aliases |
+| `contract_fresh (p, n)` | `p` is an object of exactly `n` bytes that nothing else visible aliases |
 | `contract_same_object (p, q)` | `p` and `q` point into one object |
 | `contract_disjoint (p, q)` | they do not |
-| `contract_pointer_offset (p)` | `p`'s offset within its object |
-| `contract_old (E)` | `E` at function entry |
-| `contract_result` | the return value; `contract_returns` only |
-| `contract_range (p, lo, hi)` | elements `[lo, hi)` of `p`, for a frame |
-| `contract_locations (a, b)` | two frame locations; nests for more |
-| `contract_forall (i, lo, hi, P)` | `P` for every `i` in `[lo, hi)` |
-| `contract_ssize_t` | signed, wide enough for a pointer offset |
+| `contract_forall (i, lo, hi, P)` | `P` holds for every `i` in `[lo, hi)` |
 
-### Loops
+### Values
 
-Between the loop header and the body. CBMC then proves the loop by induction
-instead of unwinding it, which is what makes a proof unbounded.
+**Things you can name inside a clause but that are not true or false.** They
+appear in ordinary C expressions, next to your own variables.
+
+| value | is |
+|---|---|
+| `contract_old (E)` | `E` evaluated at function entry |
+| `contract_result` | the return value. `contract_returns` only |
+| `contract_pointer_offset (p)` | `p`'s offset within its own object |
+| `contract_ssize_t` | a signed type wide enough to hold that offset |
+
+### Frame locations
+
+**Memory a function is allowed to write.** These go inside
+`contract_assigns (...)` and nowhere else.
+
+| location | is |
+|---|---|
+| `contract_range (p, lo, hi)` | elements `[lo, hi)` of `p`, half open |
+| `contract_locations (a, b)` | two locations at once; nest it for three or more |
+
+A bare lvalue is also a location, so `contract_assigns (i)` says the function
+may write `i` and nothing else. Nesting is how you get past two, because the
+header uses no variadic macros and so stays valid C89:
+
+```c
+contract_assigns (contract_locations(op, contract_locations(ip,
+                    contract_range(dst, 0, n))))
+```
+
+### Loop clauses
+
+**Clauses that go on a loop instead of on a function**, between the loop header
+and the body. With them CBMC proves the loop by induction rather than unwinding
+it, which is what makes a proof hold for every input rather than up to a bound.
 
 ```c
 while (i < n)
