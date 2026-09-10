@@ -35,6 +35,18 @@
 #ifndef __C_CONTRACTS_H
 #define __C_CONTRACTS_H
 
+/* This header is meant to be copied into a project and committed there, so a
+ * vendored copy has to be able to say which one it is. Bumped whenever the
+ * annotation language changes in a way a consumer could notice: a clause added
+ * or removed, a spelling changed, a marker string changed. Not bumped for
+ * comments or for a fix that leaves every expansion identical.
+ *
+ * A project can test it:  #if C_CONTRACTS_VERSION < 2 ... #endif
+ * and c-contracts reports a copy older than the one it was built against,
+ * rather than quietly finding no clauses.
+ */
+#define C_CONTRACTS_VERSION 1
+
 /* Marks a declaration that exists only to be named by an annotation. Such a
  * variable is genuinely unused once the annotations vanish, so without this
  * every annotated loop that needs a starting-value witness costs the project a

@@ -6,12 +6,30 @@
 #include "clang/AST/Attr.h"
 #include "clang/AST/Expr.h"
 #include "clang/Basic/SourceManager.h"
+#include "clang/Lex/Preprocessor.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
 
 namespace ccontracts {
+
+unsigned headerVersion(const Preprocessor &PP) {
+  const IdentifierInfo *II = PP.getIdentifierInfo("C_CONTRACTS_VERSION");
+  if (!II)
+    return 0;
+  const MacroInfo *MI = PP.getMacroInfo(const_cast<IdentifierInfo *>(II));
+  // An object-like macro of one integer token is the only shape the header
+  // writes; anything else is somebody else's macro of the same name.
+  if (!MI || MI->isFunctionLike() || MI->getNumTokens() != 1)
+    return 0;
+  const Token &Tok = MI->tokens().front();
+  if (Tok.isNot(tok::numeric_constant))
+    return 0;
+  unsigned Value = 0;
+  llvm::StringRef Spelling(Tok.getLiteralData(), Tok.getLength());
+  return Spelling.getAsInteger(10, Value) ? 0 : Value;
+}
 
 llvm::StringRef describe(ClauseKind K) {
   switch (K) {

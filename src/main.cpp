@@ -22,6 +22,7 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
+#include "clang/Lex/Preprocessor.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/CommandLine.h"
@@ -204,14 +205,15 @@ private:
 
 class CheckConsumer : public ASTConsumer {
 public:
-  explicit CheckConsumer(std::vector<std::string> Args)
-      : Args(std::move(Args)) {}
+  CheckConsumer(std::vector<std::string> Args, const Preprocessor &PP)
+      : Args(std::move(Args)), PP(PP) {}
 
   void HandleTranslationUnit(ASTContext &Ctx) override {
     std::vector<Contract> Contracts;
     ContractCollector(Contracts).TraverseDecl(Ctx.getTranslationUnitDecl());
 
     const SourceManager &SM = Ctx.getSourceManager();
+    warnOnStaleHeader(Contracts);
 
     if (!ProveFunction.empty()) {
       ProveStatus = prove(Contracts, Ctx);
@@ -243,6 +245,23 @@ public:
   }
 
 private:
+  /// c_contracts.h is vendored, so the copy in front of the tool belongs to the
+  /// project and may be much older than this binary. Saying so beats finding
+  /// nothing and reporting silence, which is what an old copy looks like.
+  void warnOnStaleHeader(const std::vector<Contract> &Contracts) {
+    unsigned Found = headerVersion(PP);
+    if (Found >= RequiredHeaderVersion)
+      return;
+    // No version macro and no clauses is simply a file that is not annotated.
+    if (Found == 0 && Contracts.empty())
+      return;
+    llvm::errs() << "warning: this c_contracts.h is version "
+                 << (Found ? std::to_string(Found)
+                           : std::string("older than 1"))
+                 << "; c-contracts was built for " << RequiredHeaderVersion
+                 << ". Re-vendor the header if clauses come back missing.\n";
+  }
+
   /// Level 3. The contract is already type-checked by the time this runs; what
   /// is left is whether it is true for every input, which is CBMC's job.
   int prove(const std::vector<Contract> &Contracts, ASTContext &Ctx) {
@@ -283,15 +302,16 @@ private:
   }
 
   std::vector<std::string> Args;
+  const Preprocessor &PP;
 };
 
 class CheckAction : public ASTFrontendAction {
 public:
   explicit CheckAction(std::vector<std::string> Args) : Args(std::move(Args)) {}
 
-  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &,
+  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                  llvm::StringRef) override {
-    return std::make_unique<CheckConsumer>(Args);
+    return std::make_unique<CheckConsumer>(Args, CI.getPreprocessor());
   }
 
 private:
