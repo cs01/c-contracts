@@ -4,13 +4,21 @@ Prove a C function correct for every input, from annotations that survive an
 ordinary build.
 
 ```c
+#include <stddef.h>
 #include "c_contracts.h"
 
 void zero(unsigned char *p, size_t n)
   contract_pre     (n > 0 && n < 64)
   contract_pre     (contract_fresh(p, n))
   contract_assigns (contract_range(p, 0, n))
-{ ... }
+{
+  size_t i = 0;
+  while (i < n)
+    contract_assigns   (contract_locations(i, contract_range(p, 0, n)))
+    contract_invariant (i <= n)
+    contract_decreases (n - i)
+  { p[i] = 0; i++; }
+}
 ```
 
 ```
@@ -23,9 +31,9 @@ zero: VERIFICATION SUCCESSFUL
 ```
 
 That is a proof, not a test: it holds for every `p` and every `n` the
-preconditions allow. CBMC does the proving. What this adds is that the same
-annotated file still compiles under GCC, MSVC, tcc and any clang, where every
-clause disappears.
+preconditions allow. CBMC does the proving. What this adds is that the same file
+is still ordinary C. GCC, MSVC and tcc preprocess every clause away to the bare
+declaration; a clang with `diagnose_if` goes further and type-checks them.
 
 ```sh
 curl -O https://raw.githubusercontent.com/cs01/c-contracts/main/include/c_contracts.h
@@ -53,7 +61,8 @@ That is what tier 1 is for. It is spec hygiene, not bug finding.
 
 ## How far each tier actually sees
 
-Measured, on `void sink(int n) contract_pre (n > 0);`
+Measured, on `void sink(int n) contract_pre (n > 0);` with `enum { ZERO = 0 };`
+and `opaque()` an extern function.
 
 | call site | `clang -c` | `+ check` | `+ prove` |
 |---|---|---|---|
@@ -62,12 +71,16 @@ Measured, on `void sink(int n) contract_pre (n > 0);`
 | `sink(1 - 1)` | warns | warns | proves |
 | `const int n = 0; sink(n)` | warns | warns | proves |
 | `int n = 0; sink(n)` | silent | warns | proves |
-| `int n = 0; if (c) n = 5; sink(n)` | silent | silent | proves |
+| `int n = 0; if (opaque()) n = 5; sink(n)` | silent | silent | proves |
 | `sink(opaque())` | silent | silent | proves |
 
 The compiler folds constants. `check` adds an intra-procedural dataflow pass, so
 it sees through a variable but only keeps facts every path agrees on. Neither is
 a solver. Only the last column is a guarantee.
+
+```
+$ c-contracts check <file> -- <your compile flags>
+```
 
 `check` also type-checks `contract_returns (...)`, which needs the return type
 bound to a name and so cannot ride on `diagnose_if`.
@@ -128,13 +141,16 @@ After the parameter list, before the `;` or the `{`. They stack.
 
 ### Roles
 
-What a function does to a buffer. Counts are **bytes**; `_n` forms count
-**elements**.
+What a function does to a buffer.
+
+**Watch the units.** `contract_reads`/`contract_writes` count **bytes**, like
+`memcpy`. The `_n` forms count **elements** of a typed pointer.
+`contract_range(p, lo, hi)` also counts **elements**, and is half open.
 
 | role | expands to |
 |---|---|
 | `contract_reads (p, n)` | `contract_pre (p != 0)`, `contract_pre (contract_readable(p, n))` |
-| `contract_writes (p, n)` | `contract_pre (p != 0)`, `contract_pre (contract_writable(p, n))`, `contract_assigns (((char *)p)[0 : n])` |
+| `contract_writes (p, n)` | `contract_pre (p != 0)`, `contract_pre (contract_writable(p, n))`, and a frame of `n` bytes at `p` |
 | `contract_reads_n (p, n)` | as `contract_reads`, over `n * sizeof(*p)` bytes |
 | `contract_writes_n (p, n)` | as `contract_writes`, over `n * sizeof(*p)` bytes |
 
@@ -152,7 +168,7 @@ what says the caller must have initialized the memory.
 | `contract_disjoint (p, q)` | they do not |
 | `contract_pointer_offset (p)` | `p`'s offset within its object |
 | `contract_old (E)` | `E` at function entry |
-| `contract_result` | the return value; `returns` only |
+| `contract_result` | the return value; `contract_returns` only |
 | `contract_range (p, lo, hi)` | elements `[lo, hi)` of `p`, for a frame |
 | `contract_locations (a, b)` | two frame locations; nests for more |
 | `contract_forall (i, lo, hi, P)` | `P` for every `i` in `[lo, hi)` |
@@ -196,7 +212,7 @@ BYTE* const opStart contract_ghost = op;
 
 The header picks one at include time.
 
-| target | when | `pre` | frame, loops |
+| target | when | `contract_pre` | frame, loops |
 |---|---|---|---|
 | stock clang | `__has_attribute(diagnose_if)` | call-site warning | dropped |
 | CBMC | `-DC_CONTRACTS_CPROVER` | `__CPROVER_requires` | `__CPROVER_assigns` etc. |
