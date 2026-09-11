@@ -13,7 +13,7 @@ void zero(unsigned char *p, size_t n)
 {
   size_t i = 0;
   while (i < n)
-    contract_assigns        (contract_locations(i, contract_range(p, 0, n)))
+    contract_assigns        (i; contract_range(p, 0, n))
     contract_invariant (i <= n)
     contract_decreases      (n - i)
   { p[i] = 0; i++; }

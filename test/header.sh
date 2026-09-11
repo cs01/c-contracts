@@ -49,7 +49,7 @@ void quantified(const unsigned char *p, size_t n)
 void loops(unsigned char *p, size_t n) contract_pre (contract_fresh(p, n)) {
   size_t i = 0;
   while (i < n)
-    contract_assigns        (contract_locations(i, contract_range(p, 0, n)))
+    contract_assigns        (i; contract_range(p, 0, n))
     contract_invariant (i <= n)
     contract_decreases      (n - i)
   { p[i] = 0; i++; }
@@ -67,8 +67,8 @@ check "includes nothing" "$([ "${N:-1}" -eq 0 ] && echo 1 || echo 0)" \
 
 # ---------------------------------------------------------------- no variadics
 # C89 has no __VA_ARGS__. This is the promise that separates it from the
-# CONTRACT_REQUIRES(...) layers that need C99, and it is why contract_locations exists
-# instead of a variadic assigns.
+# CONTRACT_REQUIRES(...) layers that need C99. Several assigns locations are
+# separated with semicolons instead of a variadic macro.
 N=$(grep -c '__VA_ARGS__' "$HEADER" || true)
 check "uses no variadic macros" "$([ "${N:-1}" -eq 0 ] && echo 1 || echo 0)" \
       "$N use(s) of __VA_ARGS__"

@@ -64,10 +64,10 @@ to ask whether the result would fold once `p` is known.
 
 `c_contracts.h` lowers every precondition to `diagnose_if`, so this is what a
 project sees the moment it writes the most ordinary precondition there is. It
-cost zstd's annotated decoder a build error on the first attempt:
+cost a real annotated decoder a build error on the first attempt:
 
 ```c
-size_t ZSTD_execSequence(BYTE* op, ...)
+size_t decode(unsigned char *op, ...)
     pre (op != NULL)   /* rejected; had to become  pre (op != 0)  */
 ```
 

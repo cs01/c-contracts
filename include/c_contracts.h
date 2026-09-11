@@ -68,7 +68,6 @@
 #define contract_pre(P) __CPROVER_requires(P)
 #define contract_post(P) __CPROVER_ensures(P)
 #define contract_assigns(L) __CPROVER_assigns(L)
-#define contract_locations(A, B) A, B
 #define contract_invariant(P) __CPROVER_loop_invariant(P)
 #define contract_decreases(M) __CPROVER_decreases(M)
 
@@ -135,7 +134,6 @@ int __contract_obeys(void (*)(void), void (*)(void));
 #define contract_assigns(L)
 #define contract_frees(L)
 #define contract_writes_nothing()
-#define contract_locations(A, B) A, B
 
 #define contract_reads(P, N) contract_pre((P) != 0) contract_pre(contract_readable((P), (N)))
 #define contract_writes(P, N) contract_pre((P) != 0) contract_pre(contract_writable((P), (N)))

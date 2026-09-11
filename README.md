@@ -1,9 +1,8 @@
 # c-contracts
 
 Contracts for C in one header. Write preconditions, postconditions, and frame
-conditions on your functions. The header offers progressive checks:
-* Clang type-checks them on every compile, no-op for non-clang
-* [CBMC](https://www.cprover.org/cbmc/) formally verifies the contracts for all possible inputs.
+conditions on your functions; clang type-checks them on every build, and
+[CBMC](https://www.cprover.org/cbmc/) proves them for all possible inputs.
 
 ```c
 #include "c_contracts.h"
@@ -15,49 +14,35 @@ unsigned divide(unsigned a, unsigned b)
 }
 ```
 
-Clang warns at any call site where `b` might be zero:
-
 ```
-warning: precondition b != 0 is violated by this call
-    divide(10, 0);
-    ^
-```
-
-Other compilers silently do nothing.
-
-CBMC proves it for every possible value of `a` and `b`:
-
-```
+$ clang -fsyntax-only -Iinclude examples/warn.c
+examples/warn.c:17:14: warning: precondition b != 0 is violated by this call
+   17 |   divide(1, 0);
+      |              ^
 $ ./prove.sh divide examples/demo.c -Iinclude
 VERIFICATION SUCCESSFUL
 ```
 
-See [Try it](#try-it) for a complete runnable example.
-
 ## Installation
-
-Download and include in your C project:
 
 ```sh
 curl -O https://raw.githubusercontent.com/cs01/c-contracts/main/include/c_contracts.h
 ```
 
-The header is C89 with no includes of its own.
+C89, no includes of its own. Proving needs [CBMC](https://www.cprover.org/cbmc/)
+6+ (`goto-cc`, `goto-instrument`, `cbmc`).
 
-### Dependencies
-Needs [CBMC](https://www.cprover.org/cbmc/) 6+ (`goto-cc`, `goto-instrument`, `cbmc`).
+## Three targets
 
-## Compiler Warnings vs. Proofs
-
-The same annotations target three compilers:
+The same annotations mean three different things depending on what compiles them:
 
 | compiler | mechanism | check |
 |---|---|---|
-| CBMC (`-DC_CONTRACTS_CPROVER`) | `__CPROVER_requires` / `__CPROVER_r_ok` / etc. | exhaustive formal proof over all inputs |
-| stock clang | `diagnose_if` attribute | compile-time warnings at call sites where the compiler can fold constants |
-| GCC / MSVC / tcc | everything expands to nothing | zero checking, zero overhead |
+| CBMC (`-DC_CONTRACTS_CPROVER`) | `__CPROVER_requires` etc. | exhaustive proof over all inputs |
+| stock clang | `diagnose_if` attribute | warnings at call sites it can fold |
+| GCC / MSVC / tcc | expands to nothing | zero checking, zero overhead |
 
-Save this as `warn.c` and compile with clang to see which call sites warn:
+[`examples/warn.c`](examples/warn.c) — which call sites clang can see:
 
 ```c
 #include "c_contracts.h"
@@ -82,22 +67,16 @@ void test(void) {
 ```
 
 ```
-$ clang -fsyntax-only warn.c
-warn.c:13:14: warning: precondition b != 0 is violated by this call
-warn.c:14:17: warning: precondition b != 0 is violated by this call
-warn.c:15:38: warning: precondition b != 0 is violated by this call
+$ clang -fsyntax-only -Iinclude examples/warn.c
+examples/warn.c:17:14: warning: precondition b != 0 is violated by this call
+examples/warn.c:18:17: warning: precondition b != 0 is violated by this call
+examples/warn.c:19:38: warning: precondition b != 0 is violated by this call
 ```
-
-Clang catches constants and folded constants at compile time; anything it cannot
-evaluate is silent. CBMC proves every case for every possible input.
-This example is also at [`examples/warn.c`](examples/warn.c).
-
 
 ## Try it
 
-Where the prover earns its keep. The divisor here is `hi - lo`, zero when the
-range is empty — not something clang can fold, so it says nothing about any of
-these.
+[`examples/demo.c`](examples/demo.c) — the divisor is `hi - lo`, zero on an
+empty range. Clang cannot fold it, so it is silent on all three:
 
 ```c
 /* Nothing rules out an empty range. */
@@ -119,10 +98,7 @@ unsigned scale_ranged(unsigned x, unsigned lo, unsigned hi)
 }
 ```
 
-Clang is silent on all three. CBMC tells them apart:
-
 ```
-$ clang -fsyntax-only -Iinclude examples/demo.c
 $ ./prove.sh scale examples/demo.c -Iinclude
 [divide.division-by-zero.1] line 16 division by zero in a / b: FAILURE
 VERIFICATION FAILED
@@ -134,11 +110,8 @@ $ ./prove.sh scale_ranged examples/demo.c -Iinclude
 VERIFICATION SUCCESSFUL
 ```
 
-The full file is [`examples/demo.c`](examples/demo.c). Both fixes are
-legitimate: check the condition at runtime, or state it as your own
-precondition and hand the obligation to your caller. For the last one CBMC has
-to prove that `hi > lo` implies `hi - lo != 0` — a fact about the caller's
-argument becoming a fact about the callee's.
+For the last one CBMC has to prove that `hi > lo` implies `hi - lo != 0` — a
+fact about the caller's argument becoming a fact about the callee's.
 
 ## Generating proofs
 
@@ -146,35 +119,27 @@ argument becoming a fact about the callee's.
 ./prove.sh <function> <source.c> [-I dir ...] [-r dep ...] [-H] [-- cbmc flags]
 ```
 
-`prove.sh` drives CBMC through four stages:
+1. **Preprocess** with `-DC_CONTRACTS_CPROVER`, so clauses become `__CPROVER_*`.
+2. **Compile** to a goto program with `goto-cc`.
+3. **Instrument** — `goto-instrument` applies loop contracts, enforces the named
+   function's contract, and derives the entry point from its preconditions.
+4. **Prove** — `cbmc` checks every reachable property. Solvers race; first clean
+   answer wins.
 
-1. **Preprocess** — compiles with `-DC_CONTRACTS_CPROVER` so contract macros
-   expand to `__CPROVER_requires`, `__CPROVER_ensures`, etc.
-2. **Compile** — `goto-cc` produces a goto program.
-3. **Instrument** — `goto-instrument` applies loop contracts and enforces the
-   named function's contract, generating the entry point from its preconditions.
-4. **Prove** — `cbmc` checks every reachable property. Multiple solvers race
-   and the first clean answer wins.
-
-A vacuity check runs after a successful proof: if the preconditions are
-unsatisfiable, the proof is vacuous and `prove.sh` exits with an error.
+A vacuity check follows a successful proof: unsatisfiable preconditions make
+everything hold for free, so `prove.sh` exits with an error instead.
 
 ## Modular verification
-Once a function has been verified, you can re-use that proof for functions that
-call it, rather than re-verifying the entire codebase for each function.
 
-Once you prove a dependency, use `-r` so callers
-trust its contract instead of re-analyzing its body:
+Prove a leaf, then pass `-r` so callers trust its contract instead of
+re-analyzing its body. Each proof stays small no matter how deep the call tree.
 
 ```
-$ ./prove.sh compress_bound source.c           # prove the leaf
-$ ./prove.sh compress source.c -r compress_bound  # prove the caller
+$ ./prove.sh compress_bound source.c
+$ ./prove.sh compress source.c -r compress_bound
 ```
 
-This scales to large codebases. Each proof stays small regardless of the
-call tree below it.
-
-If a function's contract uses `contract_readable`/`contract_writable` without
+If a contract uses `contract_readable`/`contract_writable` without
 `contract_fresh`, there is no object for CBMC to allocate. Write your own entry
 point and pass `-H` to skip frame enforcement:
 
@@ -187,7 +152,7 @@ $ ./prove.sh my_harness source.c -H
 ### Clauses
 
 A clause goes after the parameter list, before the `;` or `{`. They stack.
-Everything else below is shorthand for clauses or vocabulary you use inside one.
+Everything below is shorthand for a clause, or vocabulary you use inside one.
 
 | clause | means |
 |---|---|
@@ -200,9 +165,9 @@ Everything else below is shorthand for clauses or vocabulary you use inside one.
 
 ### Predicates
 
-Predicates go inside clauses. They are the vocabulary for talking about memory,
-which C has no syntax for. `contract_pre (contract_fresh(p, n))` is a clause
-containing a predicate; `contract_fresh(p, n)` on its own specifies nothing.
+The vocabulary for memory, which C has no syntax for. These go *inside* a
+clause: `contract_pre (contract_fresh(p, n))` specifies something,
+`contract_fresh(p, n)` alone does not.
 
 | predicate | true when |
 |---|---|
@@ -219,8 +184,6 @@ containing a predicate; `contract_fresh(p, n)` on its own specifies nothing.
 
 ### Values
 
-Things you can name inside a clause that are not true or false.
-
 | value | is |
 |---|---|
 | `contract_old (E)` | `E` evaluated at function entry |
@@ -231,39 +194,43 @@ Things you can name inside a clause that are not true or false.
 
 ### Frame locations
 
-Memory a function is allowed to write. These go inside `contract_assigns (...)`.
+Memory a function may write. These go inside `contract_assigns (...)`. A bare
+lvalue is also a location, so `contract_assigns (i)` says `i` and nothing else.
 
 | location | is |
 |---|---|
 | `contract_range (p, lo, hi)` | elements `[lo, hi)` of `p`, half open |
 | `contract_object_whole (p)` | the entire object `p` points into |
 | `contract_object_from (p)` | from `p` to the end of its object |
-| `contract_locations (a, b)` | two locations at once; nest for three or more |
 
-A bare lvalue is also a location, so `contract_assigns (i)` says the function
-may write `i` and nothing else.
+`contract_assigns` takes a single argument because the header promises C89, and
+C89 has no `__VA_ARGS__`. Separate several locations with semicolons, which the
+preprocessor does not treat as argument separators:
 
 ```c
-contract_assigns (contract_locations(op, contract_locations(ip,
-                    contract_range(dst, 0, n))))
+contract_assigns (op; ip; contract_range(dst, 0, n))
 ```
+
+A comma-separated list works too, but only inside one set of parentheses that
+the preprocessor already sees as a single argument. Semicolons are the form
+that always works, on function and loop clauses alike.
 
 ### Loop clauses
 
-Clauses that go on a loop instead of a function, between the header and the
-body. With them CBMC proves the loop by induction rather than unwinding it, so
-the proof holds for every input rather than up to a bound.
+These go on a loop, between the header and the body. With them CBMC proves the
+loop by induction rather than unwinding it, so the result holds for every input
+rather than up to a bound.
 
 ```c
 while (i < n)
-  contract_assigns   (contract_locations(i, contract_range(p, 0, n)))
+  contract_assigns   (i; contract_range(p, 0, n))
   contract_invariant (i <= n)
   contract_decreases (n - i)
 { p[i] = 0; i++; }
 ```
 
-`contract_ghost` marks a variable that exists only for an annotation, so it
-does not trigger `-Wunused-variable` where the clauses are not checked:
+`contract_ghost` marks a variable that exists only for an annotation, so it does
+not trip `-Wunused-variable` on targets where clauses vanish:
 
 ```c
 BYTE* const opStart contract_ghost = op;
@@ -271,12 +238,11 @@ BYTE* const opStart contract_ghost = op;
 
 ### Roles
 
-A role expands to several clauses. Anything a role says, you can write out by
-hand.
+A role expands to several clauses; anything it says you can also write by hand.
 
 **Watch the units.** `contract_reads`/`contract_writes` count **bytes**, like
-`memcpy`. The `_n` forms count **elements** of a typed pointer.
-`contract_range(p, lo, hi)` also counts **elements**, and is half open.
+`memcpy`. The `_n` forms count **elements**. `contract_range(p, lo, hi)` also
+counts elements, and is half open.
 
 | role | expands to |
 |---|---|
@@ -290,21 +256,20 @@ A function that reads then writes carries both roles.
 ## Gotchas
 
 - **Write `0`, not `NULL`.** `contract_pre (p != NULL)` does not compile on
-  clang. `NULL` is `((void *)0)` and a cast to a pointer is not a constant
-  expression in C. `contract_pre (p != 0)` works.
+  clang: `NULL` is `((void *)0)`, and a cast to a pointer is not a constant
+  expression in C.
 - **`contract_writes` says nothing about aliasing.** Two roles on one call may
   name the same buffer. Say `contract_pre (contract_disjoint(a, b))` or
   `contract_pre (contract_fresh(p, n))` if you mean it.
 
 ## Tests
 
-Nothing to build first — the product is a header and two shell scripts, so the
-gates are the whole of CI. `test/run.sh` runs them all; each one also runs on
-its own. A gate whose prerequisite is missing skips loudly rather than failing.
+Nothing to build — the product is a header and a shell script, so these gates
+are the whole of CI. `test/run.sh` runs them all; each also runs alone, and
+skips loudly if its prerequisite is missing.
 
 | gate | needs |
 |---|---|
 | `test/header.sh` | a C compiler |
 | `test/readme.sh` | a C compiler. Compiles this file's examples |
 | `test/prove.sh` | CBMC. Runs `prove.sh` over `test/prove/` |
-| `test/zstd.sh` | CBMC and a zstd checkout carrying the annotations |

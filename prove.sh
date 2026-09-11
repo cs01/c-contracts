@@ -57,13 +57,38 @@ N=$(grep -oE '__CPROVER_(requires|ensures|assigns|loop_invariant|decreases)\b' \
 [ "${N:-0}" -gt 0 ] || { echo "no contract clauses found on $FN" >&2; exit 2; }
 echo "lowered ${N} clause(s)"
 
-# 2. Compile to goto program.
-goto-cc "$W/pp.i" -o "$W/a.goto" 2>"$W/goto.log" || {
-  echo "goto-cc failed:" >&2; cat "$W/goto.log" >&2; exit 3; }
+# 2. Compile to goto program. In harness mode the entry point is named now,
+# not just at solve time, so step 3 can tell which functions are reachable.
+if [ "$HARNESS" = 1 ]; then
+  goto-cc --function "$FN" "$W/pp.i" -o "$W/a.goto" 2>"$W/goto.log" || {
+    echo "goto-cc failed:" >&2; cat "$W/goto.log" >&2; exit 3; }
+else
+  goto-cc "$W/pp.i" -o "$W/a.goto" 2>"$W/goto.log" || {
+    echo "goto-cc failed:" >&2; cat "$W/goto.log" >&2; exit 3; }
+fi
 
-# 3. Apply loop contracts (invariants, decreases), then enforce the function contract.
-goto-instrument --apply-loop-contracts "$W/a.goto" "$W/b.goto" >/dev/null 2>&1 ||
-  cp "$W/a.goto" "$W/b.goto"
+# 3. Drop what the entry point cannot reach, then apply loop contracts.
+#
+# The order is the whole cost of the run when the source pulls in a large
+# translation unit. --apply-loop-contracts walks every loop in the program,
+# so on a file that includes something like zstd's decompress unit it spends
+# its time on decode loops the proof never enters -- long enough to look like
+# a hang. Dropping unreachable functions first leaves only the loops the
+# entry point can actually run, and the same step finishes in well under a
+# second. Harmless when the program is already small.
+#
+# Only safe with an entry point to measure reachability from, which is why
+# enforce mode skips it: there the entry point does not exist yet, it is
+# generated from the contract in step 4.
+if [ "$HARNESS" = 1 ]; then
+  goto-instrument --drop-unused-functions "$W/a.goto" "$W/s.goto" >/dev/null 2>&1 ||
+    cp "$W/a.goto" "$W/s.goto"
+else
+  cp "$W/a.goto" "$W/s.goto"
+fi
+
+goto-instrument --apply-loop-contracts "$W/s.goto" "$W/b.goto" >/dev/null 2>&1 ||
+  cp "$W/s.goto" "$W/b.goto"
 
 REPLACE_FLAGS=""
 for R in $REPLACE; do
@@ -75,8 +100,20 @@ if [ "$HARNESS" = 1 ]; then
   # generate it from and no frame to check it against. Everything else -- the
   # loop contracts already applied above, the callees' contracts, and the
   # memory-safety checks -- still holds.
-  cp "$W/b.goto" "$W/c.goto"
-  echo "mode: harness (frame not checked)"
+  #
+  # -r still applies here, and this is where it earns its keep: replacing a
+  # callee with its contract makes CBMC assert every contract_pre at the call
+  # site instead of inlining the body, which is what checks that the harness
+  # set up inputs the contract actually permits.
+  if [ -n "$REPLACE" ]; then
+    # shellcheck disable=SC2086
+    goto-instrument $REPLACE_FLAGS "$W/b.goto" "$W/c.goto" >/dev/null 2>"$W/replace.log" || {
+      echo "--replace-call-with-contract failed:" >&2; cat "$W/replace.log" >&2; exit 4; }
+    echo "mode: harness (frame not checked), callees replaced by contract:$REPLACE"
+  else
+    cp "$W/b.goto" "$W/c.goto"
+    echo "mode: harness (frame not checked)"
+  fi
 else
   # A loop without a contract does not make goto-instrument decline politely:
   # it aborts, and the shell then prints "Aborted (core dumped)" over the top
@@ -105,16 +142,80 @@ else
   echo "mode: enforce (frame checked)"
 fi
 
-# 4. Prove.
-HERE=$(cd "$(dirname "$0")" && pwd)
-if [ -x "$HERE/solve.sh" ]; then
+# 4. Prove. Solve time varies up to 20x between backends in either direction,
+# so a static choice is a coin flip on a job that can run for minutes. Racing
+# every installed solver and taking the first clean answer costs cores (cheap)
+# instead of wall time (not). RC is cbmc's: 0 proved, 10 counterexample. 124 if
+# every solver hits TIMEOUT.
+S=$W/solve; mkdir -p "$S"
+
+# Built-in path is bit-blast + MiniSat, named so the log says which one won.
+CANDIDATES="sat:"
+for T in z3 bitwuzla cvc5; do
+  if command -v "$T" >/dev/null 2>&1; then CANDIDATES="$CANDIDATES $T:--$T"; fi
+done
+
+START=$(date +%s)
+for C in $CANDIDATES; do
+  NAME=${C%%:*}; FLAG=${C#*:}
+  # A solver that aborts is a normal outcome of a race -- another one is still
+  # running -- but the subshell would report the signal death to the terminal
+  # over the top of the winner's output. cbmc's own streams are already in the
+  # log, so the subshell has nothing else to say. errexit is off inside it so
+  # that a counterexample (rc 10) still reaches the .rc file the race reads.
   # shellcheck disable=SC2086
-  "$HERE/solve.sh" "$W/c.goto" --function "$FN" $CBMC_FLAGS
+  ( set +e
+    cbmc "$W/c.goto" --function "$FN" $FLAG $CBMC_FLAGS > "$S/$NAME.log" 2>&1
+    echo $? > "$S/$NAME.rc" ) 2>/dev/null &
+  echo "$!" > "$S/$NAME.pid"
+done
+
+WINNER=""; RC=124
+while [ $(( $(date +%s) - START )) -lt "${TIMEOUT:-900}" ]; do
+  for C in $CANDIDATES; do
+    NAME=${C%%:*}
+    [ -f "$S/$NAME.rc" ] || continue
+    R=$(cat "$S/$NAME.rc")
+    case "$R" in
+      # A counterexample is definitive: the trace exists.
+      10) WINNER=$NAME; RC=$R; break ;;
+      # "Proved" only counts if every property was decided.
+      0)  if grep -q ': UNKNOWN' "$S/$NAME.log" 2>/dev/null; then continue; fi
+          WINNER=$NAME; RC=$R; break ;;
+      *)  ;;
+    esac
+  done
+  if [ -n "$WINNER" ]; then break; fi
+  # All solvers exited without a verdict.
+  DONE=$(ls "$S"/*.rc 2>/dev/null | wc -l | tr -d ' ')
+  N=$(echo "$CANDIDATES" | wc -w | tr -d ' ')
+  if [ "$DONE" -ge "$N" ]; then break; fi
+  sleep 2
+done
+ELAPSED=$(( $(date +%s) - START ))
+
+# Kill the losers.
+for C in $CANDIDATES; do
+  NAME=${C%%:*}
+  if [ "$NAME" = "$WINNER" ]; then continue; fi
+  kill "$(cat "$S/$NAME.pid")" 2>/dev/null || true
+  pkill -P "$(cat "$S/$NAME.pid")" 2>/dev/null || true
+done
+
+if [ -n "$WINNER" ]; then
+  cat "$S/$WINNER.log"
+  echo "== solved by $WINNER in ${ELAPSED}s"
 else
-  # shellcheck disable=SC2086
-  cbmc "$W/c.goto" --function "$FN" $CBMC_FLAGS
+  echo "== no solver finished within ${TIMEOUT:-900}s"
+  for C in $CANDIDATES; do
+    NAME=${C%%:*}
+    PHASE=$(grep -E "Starting Bounded Model Checking|converting SSA|Running|Passing problem" \
+              "$S/$NAME.log" 2>/dev/null | tail -1)
+    RCS=$( [ -f "$S/$NAME.rc" ] && cat "$S/$NAME.rc" || echo running )
+    printf '   %-10s rc=%-8s last phase: %s\n' "$NAME" "$RCS" "${PHASE:-<none>}"
+  done
+  exit 124
 fi
-RC=$?
 
 # 5. Vacuity, and only on success. Preconditions nothing can satisfy leave the
 # body unreachable, so every property holds and the proof proves nothing --

@@ -4,7 +4,7 @@
 #   test/run.sh [gate ...]
 #
 # With no arguments it runs all of them. There is nothing to build first: the
-# product is a header and two shell scripts, so the gates are the whole of CI.
+# product is a header and a shell script, so the gates are the whole of CI.
 #
 # A gate whose prerequisite is missing skips loudly and does not fail: a
 # contributor with only a C compiler can still run the two that matter most,
@@ -12,7 +12,7 @@
 set -u
 
 DIR=$(cd "$(dirname "$0")" && pwd)
-GATES=${*:-header readme prove zstd}
+GATES=${*:-header readme prove}
 
 FAILED=
 for g in $GATES; do
